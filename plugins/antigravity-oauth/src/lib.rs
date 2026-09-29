@@ -1596,18 +1596,21 @@ impl exports::hooks::Guest for Component {
     }
 }
 
-// --- Adapter world (`plugin-adapter`): the `v1internal` wire format. ---------
+// --- API v2 adapter world: the `v1internal` wire format. --------------------
 //
-// A second world bound from the same component (§6.3). The adapter is a pure
-// translation library and imports no network capability.
+// This session-aware adapter is a separate WIT world. The main plugin,
+// authorization, and discovery exports remain API v1.
 
-use kinetix_plugin_sdk::adapter as adapter_world;
+use adapter_world::exports::kinetix::plugin2_0_0::provider_adapter::Guest as ProviderAdapterGuest;
+use adapter_world::kinetix::plugin1_0_0::host_storage;
+use kinetix_plugin_sdk::adapter_v2 as adapter_world;
 
-/// Adapter error → the adapter world's generated `PluginError`.
-fn adapter_err(
-    e: crate::adapter::AdapterError,
-) -> adapter_world::kinetix::plugin::types::PluginError {
-    adapter_world::kinetix::plugin::types::PluginError {
+type AdapterPluginError = adapter_world::kinetix::plugin1_0_0::types::PluginError;
+type AdapterSessionContext = adapter_world::kinetix::plugin2_0_0::types::SessionContext;
+
+/// Adapter error → the API v1 generated `PluginError` used by API v2.
+fn adapter_err(e: crate::adapter::AdapterError) -> AdapterPluginError {
+    AdapterPluginError {
         code: e.code,
         message: e.message,
         retryable: false,
@@ -1630,7 +1633,7 @@ fn provider_with_account_project(provider_json: &str) -> String {
 
     if let (Some(provider_id), Some(account_id)) = (provider_id, account_id) {
         let key = project_state_key(&provider_id, &account_id);
-        if let Some(bytes) = adapter_world::kinetix::plugin::host_storage::get(&key) {
+        if let Some(bytes) = host_storage::get(&key) {
             if let Ok(project_id) = String::from_utf8(bytes) {
                 let project_id = project_id.trim();
                 if !project_id.is_empty() {
@@ -1649,50 +1652,51 @@ fn provider_with_account_project(provider_json: &str) -> String {
     provider.to_string()
 }
 
-impl adapter_world::exports::provider_adapter::Guest for Component {
+impl ProviderAdapterGuest for Component {
     fn wire_format() -> String {
         crate::adapter::wire_format()
     }
-    fn build_url(
-        provider_json: String,
-        model_json: String,
-    ) -> Result<String, adapter_world::kinetix::plugin::types::PluginError> {
+    fn build_url(provider_json: String, model_json: String) -> Result<String, AdapterPluginError> {
         crate::adapter::build_url(&provider_json, &model_json).map_err(adapter_err)
     }
     fn apply_auth(
         provider_json: String,
         credential: String,
-    ) -> Result<String, adapter_world::kinetix::plugin::types::PluginError> {
+        _session: Option<AdapterSessionContext>,
+    ) -> Result<String, AdapterPluginError> {
         crate::adapter::apply_auth(&provider_json, &credential).map_err(adapter_err)
     }
     fn build_body(
         request_json: String,
         provider_json: String,
         model_json: String,
-    ) -> Result<String, adapter_world::kinetix::plugin::types::PluginError> {
+        session: Option<AdapterSessionContext>,
+    ) -> Result<String, AdapterPluginError> {
         let provider_json = provider_with_account_project(&provider_json);
-        crate::adapter::build_body(&request_json, &provider_json, &model_json).map_err(adapter_err)
+        crate::adapter::build_body(
+            &request_json,
+            &provider_json,
+            &model_json,
+            session.as_ref().map(|session| session.id.as_str()),
+        )
+        .map_err(adapter_err)
     }
     fn classify_error(
         status: u16,
         body: String,
         headers_json: String,
-    ) -> Result<String, adapter_world::kinetix::plugin::types::PluginError> {
+    ) -> Result<String, AdapterPluginError> {
         crate::adapter::classify_error(status, &body, &headers_json).map_err(adapter_err)
     }
-    fn parse_stream_chunk(
-        data: String,
-    ) -> Result<String, adapter_world::kinetix::plugin::types::PluginError> {
+    fn parse_stream_chunk(data: String) -> Result<String, AdapterPluginError> {
         crate::adapter::parse_stream_chunk(&data).map_err(adapter_err)
     }
-    fn parse_full_response(
-        body_json: String,
-    ) -> Result<String, adapter_world::kinetix::plugin::types::PluginError> {
+    fn parse_full_response(body_json: String) -> Result<String, AdapterPluginError> {
         crate::adapter::parse_full_response(&body_json).map_err(adapter_err)
     }
 }
 
-adapter_world::export!(Component with_types_in kinetix_plugin_sdk::adapter);
+adapter_world::export!(Component with_types_in kinetix_plugin_sdk::adapter_v2);
 
 export!(Component with_types_in kinetix_plugin_sdk);
 

@@ -1,8 +1,8 @@
 manifest_version = 1
 id = "dev.kinetix.opencode-free"
 name = "OpenCode Free"
-version = "0.1.7"
-plugin_api = "1"
+version = "0.1.8"
+plugin_api = "2"
 
 [provides]
 model_sources = ["opencode-free-models"]
