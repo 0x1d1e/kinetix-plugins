@@ -374,14 +374,21 @@ impl adapter_world::exports::provider_adapter::Guest for Component {
     fn apply_auth(
         provider_json: String,
         credential: String,
+        session: Option<adapter_world::kinetix::plugin::types::SessionContext>,
     ) -> Result<String, adapter_world::kinetix::plugin::types::PluginError> {
-        adapter::apply_auth(&provider_json, &credential).map_err(adapter_error)
+        adapter::apply_auth(
+            &provider_json,
+            &credential,
+            session.as_ref().map(|session| session.id.as_str()),
+        )
+        .map_err(adapter_error)
     }
 
     fn build_body(
         request_json: String,
         provider_json: String,
         model_json: String,
+        _session: Option<adapter_world::kinetix::plugin::types::SessionContext>,
     ) -> Result<String, adapter_world::kinetix::plugin::types::PluginError> {
         adapter::build_body(&request_json, &provider_json, &model_json).map_err(adapter_error)
     }
@@ -413,6 +420,56 @@ export!(Component with_types_in kinetix_plugin_sdk);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adapter_export_reuses_upstream_session_for_a_stable_kinetix_session() {
+        use adapter_world::exports::provider_adapter::Guest;
+        use adapter_world::kinetix::plugin::types::SessionContext;
+
+        let first: serde_json::Value = serde_json::from_str(
+            &<Component as Guest>::apply_auth(
+                "{}".into(),
+                "public".into(),
+                Some(SessionContext {
+                    id: "opaque-session-44".into(),
+                }),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let second: serde_json::Value = serde_json::from_str(
+            &<Component as Guest>::apply_auth(
+                "{}".into(),
+                "public".into(),
+                Some(SessionContext {
+                    id: "opaque-session-44".into(),
+                }),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let session_header = |headers: &serde_json::Value| {
+            headers
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|header| header[0] == "x-opencode-session")
+                .unwrap()[1]
+                .clone()
+        };
+
+        assert_eq!(session_header(&first), session_header(&second));
+
+        let without_session: serde_json::Value = serde_json::from_str(
+            &<Component as Guest>::apply_auth("{}".into(), "public".into(), None).unwrap(),
+        )
+        .unwrap();
+        assert!(without_session
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|header| header[0] != "x-opencode-session"));
+    }
 
     #[test]
     fn discovery_export_keeps_live_availability_authoritative() {

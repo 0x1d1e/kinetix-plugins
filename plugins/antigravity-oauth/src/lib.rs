@@ -1775,6 +1775,7 @@ impl adapter_world::exports::provider_adapter::Guest for Component {
     fn apply_auth(
         provider_json: String,
         credential: String,
+        _session: Option<adapter_world::kinetix::plugin::types::SessionContext>,
     ) -> Result<String, adapter_world::kinetix::plugin::types::PluginError> {
         crate::adapter::apply_auth(&provider_json, &credential).map_err(adapter_err)
     }
@@ -1782,9 +1783,16 @@ impl adapter_world::exports::provider_adapter::Guest for Component {
         request_json: String,
         provider_json: String,
         model_json: String,
+        session: Option<adapter_world::kinetix::plugin::types::SessionContext>,
     ) -> Result<String, adapter_world::kinetix::plugin::types::PluginError> {
         let provider_json = provider_with_account_project(&provider_json);
-        crate::adapter::build_body(&request_json, &provider_json, &model_json).map_err(adapter_err)
+        crate::adapter::build_body(
+            &request_json,
+            &provider_json,
+            &model_json,
+            session.as_ref().map(|session| session.id.as_str()),
+        )
+        .map_err(adapter_err)
     }
     fn classify_error(
         status: u16,

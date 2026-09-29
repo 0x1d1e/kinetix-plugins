@@ -8,7 +8,7 @@
 // separate world (`plugin-adapter`) so that a buffered-only contract can never
 // be mistaken for the adapter contract.
 
-package kinetix:plugin@1.0.0;
+package kinetix:plugin@1.1.0;
 
 /// Shared value types exchanged across the host boundary.
 interface types {
@@ -28,6 +28,13 @@ interface types {
   record account-ref {
     provider-id: string,
     account-id: string,
+  }
+
+  /// Opaque identity for a recognized client session. Stable across turns and
+  /// retries; absent when the host cannot establish a session. Never an
+  /// account, route, or user-secret identifier.
+  record session-context {
+    id: string,
   }
 
   /// A reference to a credential the host owns. The plugin never receives the
@@ -269,13 +276,22 @@ world plugin-adapter {
   import host-clock;
 
   export provider-adapter: interface {
-    use types.{plugin-error};
+    use types.{plugin-error, session-context};
     /// The wire-format name this adapter speaks.
     wire-format: func() -> string;
     build-url: func(provider-json: string, model-json: string) -> result<string, plugin-error>;
     /// Return the header list (JSON array of [name, value]) to apply.
-    apply-auth: func(provider-json: string, credential: string) -> result<string, plugin-error>;
-    build-body: func(request-json: string, provider-json: string, model-json: string) -> result<string, plugin-error>;
+    apply-auth: func(
+      provider-json: string,
+      credential: string,
+      session: option<session-context>
+    ) -> result<string, plugin-error>;
+    build-body: func(
+      request-json: string,
+      provider-json: string,
+      model-json: string,
+      session: option<session-context>
+    ) -> result<string, plugin-error>;
     /// Return JSON of the classified failure evidence.
     classify-error: func(status: u16, body: string, headers-json: string) -> result<string, plugin-error>;
     /// Parse one upstream SSE `data:` payload into a versioned

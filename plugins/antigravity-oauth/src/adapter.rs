@@ -97,6 +97,7 @@ pub fn build_body(
     request_json: &str,
     provider_json: &str,
     model_json: &str,
+    session_context: Option<&str>,
 ) -> Result<String, AdapterError> {
     let req: Value =
         serde_json::from_str(request_json).map_err(|e| bad(format!("bad request json: {e}")))?;
@@ -116,8 +117,8 @@ pub fn build_body(
         .to_string();
 
     let project = project_id(&provider, &req)?;
-    let session_id = session_id(&req);
-    let request_id = build_request_id(&session_id, &upstream_model);
+    let session_id = session_id(&req, &provider, session_context);
+    let request_id = build_request_id(session_id.as_deref(), &upstream_model);
 
     let system_instruction = req
         .get("system")
@@ -206,7 +207,9 @@ pub fn build_body(
             request.insert("toolConfig".into(), config);
         }
     }
-    request.insert("sessionId".into(), json!(session_id));
+    if let Some(session_id) = session_id {
+        request.insert("sessionId".into(), json!(session_id));
+    }
     // Canonical `extra` is host/client metadata, not an Antigravity request
     // extension point. Supported values above are consumed explicitly; every
     // other value is either dropped (permissive) or rejected (strict).
@@ -500,19 +503,41 @@ fn project_id(provider: &Value, req: &Value) -> Result<String, AdapterError> {
     ))
 }
 
-fn session_id(req: &Value) -> String {
-    req.get("extra")
-        .and_then(|e| e.get("session_id").or_else(|| e.get("sessionId")))
-        .and_then(|s| s.as_str())
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("{:016x}", fnv1a("antigravity:default")))
+fn session_id(req: &Value, provider: &Value, session_context: Option<&str>) -> Option<String> {
+    let identity = session_context
+        .filter(|session_id| !session_id.is_empty())
+        .or_else(|| {
+            req.get("extra")
+                .and_then(|e| e.get("session_id").or_else(|| e.get("sessionId")))
+                .and_then(Value::as_str)
+                .filter(|session_id| !session_id.is_empty())
+        })?;
+    let provider_id = provider
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|provider_id| !provider_id.is_empty())
+        .unwrap_or("antigravity");
+    let account_id = provider
+        .pointer("/_kinetix/account_id")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    Some(uuid_from_seed(&format!(
+        "kinetix:provider-session:v1:{}:{provider_id}:{}:{account_id}:{}:{identity}",
+        provider_id.len(),
+        account_id.len(),
+        identity.len()
+    )))
 }
 
 /// `agent/<conversationId>/<ts>/<trajectoryId>/<step>` (9router's IDE shape).
-fn build_request_id(session_id: &str, model: &str) -> String {
-    let conversation = uuid_from_seed(&format!("antigravity:conversation:{session_id}"));
-    let trajectory = uuid_from_seed(&format!("antigravity:trajectory:{session_id}:{model}"));
+fn build_request_id(session_id: Option<&str>, model: &str) -> String {
     let ts = kinetix_plugin_sdk::helpers::now_unix_millis();
+    let request_seed = match session_id {
+        Some(session_id) => format!("antigravity:conversation:{session_id}"),
+        None => format!("antigravity:request:{ts}"),
+    };
+    let conversation = uuid_from_seed(&request_seed);
+    let trajectory = uuid_from_seed(&format!("antigravity:trajectory:{request_seed}:{model}"));
     format!("agent/{conversation}/{ts}/{trajectory}/1")
 }
 
@@ -675,6 +700,7 @@ fn add_nullable_type(schema: &mut Map<String, Value>, path: &str) -> Result<(), 
     ))
 }
 
+#[cfg(test)]
 fn sanitize_schema(schema: &Value, root_path: &str) -> Result<Value, AdapterError> {
     sanitize_schema_with_policy(schema, root_path, SchemaPolicy::Strict)
 }
@@ -1247,15 +1273,6 @@ fn map_finish(reason: &str) -> &'static str {
 // Small helpers
 // ---------------------------------------------------------------------------
 
-fn fnv1a(s: &str) -> u64 {
-    let mut h: u64 = 0xcbf29ce484222325;
-    for b in s.bytes() {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    h
-}
-
 /// Deterministic RFC-4122-shaped UUID seeded by SHA-256 (no rng in the guest).
 fn uuid_from_seed(seed: &str) -> String {
     let digest = sha256(seed.as_bytes());
@@ -1426,7 +1443,11 @@ mod tests {
 
     #[test]
     fn permissive_extra_fields_are_dropped_not_forwarded() {
-        let provider = json!({ "capability_mode": "permissive" });
+        let provider = json!({
+            "id": "antigravity",
+            "capability_mode": "permissive",
+            "_kinetix": { "account_id": "account-1" }
+        });
         let req = json!({
             "schema": "kinetix.plugin.request",
             "schema_version": 1,
@@ -1440,8 +1461,32 @@ mod tests {
         });
 
         assert!(validate_canonical_extras(&provider, &req).is_ok());
-        assert_eq!(session_id(&req), "sess-1");
+        let native_session_id = session_id(&req, &provider, None).unwrap();
+        let host_session_id = session_id(&req, &provider, Some("host-session")).unwrap();
+        assert_ne!(native_session_id, host_session_id);
+        assert_eq!(
+            host_session_id,
+            session_id(&json!({}), &provider, Some("host-session")).unwrap()
+        );
         assert_eq!(project_id(&provider, &req).unwrap(), "project-1");
+    }
+
+    #[test]
+    fn provider_session_ids_are_account_scoped_and_do_not_expose_identity() {
+        let req = json!({});
+        let provider_a = json!({ "id": "antigravity", "_kinetix": { "account_id": "account-a" } });
+        let provider_b = json!({ "id": "antigravity", "_kinetix": { "account_id": "account-b" } });
+        let session_a = session_id(&req, &provider_a, Some("opaque-session")).unwrap();
+        let session_b = session_id(&req, &provider_b, Some("opaque-session")).unwrap();
+
+        assert_ne!(session_a, session_b);
+        assert!(!session_a.contains("account-a"));
+        assert!(!session_a.contains("opaque-session"));
+    }
+
+    #[test]
+    fn session_is_not_fabricated_when_unavailable() {
+        assert_eq!(session_id(&json!({}), &json!({}), None), None);
     }
 
     #[test]
