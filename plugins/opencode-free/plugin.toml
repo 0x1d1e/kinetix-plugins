@@ -15,6 +15,22 @@ description = "Use OpenCode's anonymous free-tier models with dynamic model disc
 provider_adapter = "opencode-free"
 model_source = "opencode-free-models"
 
+[integrations.features]
+schema_version = 1
+streaming = true
+tools = true
+parallel_tools = true
+vision = false
+reasoning = true
+structured_output = false
+model_discovery = true
+quota_probe = false
+health_probe = false
+
+[integrations.protocols]
+input = ["openai-chat", "openai-responses", "anthropic"]
+upstream = ["plugin-native"]
+
 [integrations.provider]
 base_url = "https://opencode.ai"
 wire_format = "plugin"

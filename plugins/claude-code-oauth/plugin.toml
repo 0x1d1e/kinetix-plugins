@@ -15,6 +15,22 @@ description = "Connect an Anthropic Claude Code subscription using the Claude OA
 credential_strategy = "claude-code-oauth"
 auth_flow = "claude-code"
 
+[integrations.features]
+schema_version = 1
+streaming = true
+tools = true
+parallel_tools = true
+vision = true
+reasoning = true
+structured_output = true
+model_discovery = false
+quota_probe = false
+health_probe = false
+
+[integrations.protocols]
+input = ["openai-chat", "openai-responses", "anthropic"]
+upstream = ["anthropic"]
+
 [integrations.provider]
 base_url = "https://api.anthropic.com/v1"
 wire_format = "anthropic"

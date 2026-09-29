@@ -13,6 +13,22 @@ name = "Google AI Studio"
 description = "Use Google AI Studio with native Gemini transport and live model discovery."
 model_source = "ai-studio-models"
 
+[integrations.features]
+schema_version = 1
+streaming = true
+tools = true
+parallel_tools = true
+vision = true
+reasoning = true
+structured_output = true
+model_discovery = true
+quota_probe = false
+health_probe = false
+
+[integrations.protocols]
+input = ["openai-chat", "openai-responses", "anthropic"]
+upstream = ["gemini"]
+
 [integrations.provider]
 base_url = "https://generativelanguage.googleapis.com/v1beta"
 wire_format = "gemini"

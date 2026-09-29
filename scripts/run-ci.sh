@@ -84,21 +84,7 @@ PY
 }
 
 validate_manifests() {
-  python3 - <<'PY'
-import pathlib, tomllib
-required = {"manifest_version", "id", "name", "version", "plugin_api"}
-manifests = sorted(pathlib.Path("plugins").glob("*/plugin.toml"))
-assert manifests, "no plugin manifests found"
-ids = set()
-for path in manifests:
-    data = tomllib.loads(path.read_text())
-    missing = required - data.keys()
-    assert not missing, f"{path}: missing {sorted(missing)}"
-    assert data["manifest_version"] == 1
-    assert data["id"] not in ids, f"{path}: duplicate plugin id {data['id']}"
-    ids.add(data["id"])
-print(f"validated {len(manifests)} plugin manifest(s)")
-PY
+  python3 scripts/test_validate_manifests.py && python3 scripts/validate_manifests.py
 }
 
 printf '%sLocal plugin-ci%s\n' "$CYAN" "$RESET"
