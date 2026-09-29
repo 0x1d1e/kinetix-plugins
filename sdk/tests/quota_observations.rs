@@ -6,6 +6,8 @@ use kinetix_plugin_sdk::health::kinetix::plugin::types::{
 fn distinguishes_unknown_zero_and_full_quota() {
     let unknown = QuotaSnapshotV1 {
         scope: QuotaScopeV1::Account,
+        group: None,
+        bucket_id: None,
         remaining_fraction: None,
         remaining: None,
         limit: None,
@@ -38,15 +40,19 @@ fn represents_multiple_windows_and_model_scoped_quota() {
         quota_snapshots: vec![
             QuotaSnapshotV1 {
                 scope: QuotaScopeV1::Account,
+                group: None,
+                bucket_id: None,
                 remaining_fraction: Some(0.72),
-                remaining: Some(720),
-                limit: Some(1_000),
+                remaining: Some(720.0),
+                limit: Some(1_000.0),
                 unit: Some("requests".into()),
                 window: Some("5h".into()),
                 reset_at: None,
             },
             QuotaSnapshotV1 {
                 scope: QuotaScopeV1::Model("gemini-2.5-pro".into()),
+                group: None,
+                bucket_id: None,
                 remaining_fraction: Some(0.4),
                 remaining: None,
                 limit: None,
@@ -56,11 +62,13 @@ fn represents_multiple_windows_and_model_scoped_quota() {
             },
             QuotaSnapshotV1 {
                 scope: QuotaScopeV1::Unknown,
+                group: Some("Gemini Models".into()),
+                bucket_id: Some("gemini-weekly".into()),
                 remaining_fraction: Some(0.15),
-                remaining: None,
-                limit: None,
-                unit: None,
-                window: None,
+                remaining: Some(1.25),
+                limit: Some(2.5),
+                unit: Some("credits".into()),
+                window: Some("weekly".into()),
                 reset_at: None,
             },
         ],
@@ -79,6 +87,12 @@ fn represents_multiple_windows_and_model_scoped_quota() {
         &observation.quota_snapshots[2].scope,
         QuotaScopeV1::Unknown
     ));
+    assert_eq!(
+        observation.quota_snapshots[2].group.as_deref(),
+        Some("Gemini Models")
+    );
+    assert_eq!(observation.quota_snapshots[2].remaining, Some(1.25));
+    assert_eq!(observation.quota_snapshots[2].limit, Some(2.5));
 }
 
 #[test]

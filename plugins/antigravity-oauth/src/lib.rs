@@ -47,8 +47,8 @@ const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const USERINFO_URL: &str = "https://www.googleapis.com/oauth2/v1/userinfo";
 const LOAD_CODE_ASSIST_URL: &str = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
 const ONBOARD_USER_URL: &str = "https://cloudcode-pa.googleapis.com/v1internal:onboardUser";
-const RETRIEVE_USER_QUOTA_URL: &str =
-    "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota";
+const RETRIEVE_USER_QUOTA_SUMMARY_URL: &str =
+    "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
 const PROJECT_KEY_PREFIX: &str = "project:";
 const ANTIGRAVITY_SCOPES: &[&str] = &[
     "https://www.googleapis.com/auth/cloud-platform",
@@ -1581,10 +1581,11 @@ type HealthObservationV2 = health_world::kinetix::plugin::types::HealthObservati
 type HealthQuotaScopeV1 = health_world::kinetix::plugin::types::QuotaScopeV1;
 type HealthQuotaSnapshotV1 = health_world::kinetix::plugin::types::QuotaSnapshotV1;
 
-fn quota_amount(value: &serde_json::Value) -> Option<u64> {
-    value
-        .as_u64()
-        .or_else(|| value.as_str()?.trim().parse::<u64>().ok())
+fn quota_amount(value: &serde_json::Value) -> Option<f64> {
+    let amount = value
+        .as_f64()
+        .or_else(|| value.as_str()?.trim().parse::<f64>().ok())?;
+    (amount.is_finite() && amount >= 0.0).then_some(amount)
 }
 
 fn normalize_quota_unit(value: &str) -> Option<String> {
@@ -1600,56 +1601,103 @@ fn normalize_quota_unit(value: &str) -> Option<String> {
     })
 }
 
+fn parse_quota_bucket(
+    bucket: &serde_json::Value,
+    group: Option<&str>,
+) -> Option<HealthQuotaSnapshotV1> {
+    let model_id = bucket
+        .get("modelId")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|model| !model.is_empty());
+    let remaining_fraction = bucket
+        .get("remainingFraction")
+        .and_then(serde_json::Value::as_f64)
+        .filter(|fraction| fraction.is_finite() && (0.0..=1.0).contains(fraction));
+    let remaining = bucket
+        .get("remainingAmount")
+        .or_else(|| bucket.get("remaining"))
+        .and_then(quota_amount);
+    let limit = bucket.get("limit").and_then(quota_amount);
+    let reset_at = bucket
+        .get("resetTime")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| parse_rfc3339_ms(value).is_some())
+        .map(str::to_string);
+
+    // Do not emit a bucket that contains no quota measurement or reset
+    // evidence. A label alone does not mean the quota is fully available.
+    if remaining_fraction.is_none() && remaining.is_none() && limit.is_none() && reset_at.is_none()
+    {
+        return None;
+    }
+
+    let scope = match model_id {
+        Some(model_id) => HealthQuotaScopeV1::Model(model_id.to_string()),
+        None => HealthQuotaScopeV1::Unknown,
+    };
+    let unit = bucket
+        .get("unit")
+        .or_else(|| bucket.get("tokenType"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(normalize_quota_unit);
+    let optional_label = |key: &str| {
+        bucket
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+
+    Some(HealthQuotaSnapshotV1 {
+        scope,
+        group: group
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        bucket_id: optional_label("bucketId"),
+        remaining_fraction,
+        remaining,
+        limit,
+        unit,
+        window: optional_label("window"),
+        reset_at,
+    })
+}
+
 fn parse_quota_snapshots(value: &serde_json::Value) -> Vec<HealthQuotaSnapshotV1> {
     value
         .get("buckets")
         .and_then(serde_json::Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(|bucket| {
-            let model_id = bucket
-                .get("modelId")
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|model| !model.is_empty());
-            let remaining_fraction = bucket
-                .get("remainingFraction")
-                .and_then(serde_json::Value::as_f64)
-                .filter(|fraction| fraction.is_finite() && (0.0..=1.0).contains(fraction));
-            let remaining = bucket.get("remainingAmount").and_then(quota_amount);
-            let reset_at = bucket
-                .get("resetTime")
-                .and_then(serde_json::Value::as_str)
-                .filter(|value| kinetix_plugin_sdk::oauth::parse_rfc3339_ms(value).is_some())
-                .map(str::to_string);
-
-            // Do not emit a bucket that contains no quota measurement or reset
-            // evidence. In particular, a missing fraction is not full quota.
-            if remaining_fraction.is_none() && remaining.is_none() && reset_at.is_none() {
-                return None;
-            }
-
-            let scope = match model_id {
-                Some(model_id) => HealthQuotaScopeV1::Model(model_id.to_string()),
-                None => HealthQuotaScopeV1::Unknown,
-            };
-            let unit = bucket
-                .get("tokenType")
-                .and_then(serde_json::Value::as_str)
-                .and_then(normalize_quota_unit);
-
-            Some(HealthQuotaSnapshotV1 {
-                scope,
-                remaining_fraction,
-                remaining,
-                limit: None,
-                unit,
-                // The provider response has no stable window label.
-                window: None,
-                reset_at,
-            })
-        })
+        .filter_map(|bucket| parse_quota_bucket(bucket, None))
         .collect()
+}
+
+fn parse_quota_summary_snapshots(value: &serde_json::Value) -> Vec<HealthQuotaSnapshotV1> {
+    let response = value.get("response").unwrap_or(value);
+    if let Some(groups) = response.get("groups").and_then(serde_json::Value::as_array) {
+        return groups
+            .iter()
+            .flat_map(|group| {
+                let display_name = group
+                    .get("displayName")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty());
+                group
+                    .get("buckets")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(move |bucket| parse_quota_bucket(bucket, display_name))
+            })
+            .collect();
+    }
+
+    parse_quota_snapshots(response)
 }
 
 fn account_quota_fields(snapshots: &[HealthQuotaSnapshotV1]) -> (Option<String>, Option<String>) {
@@ -1731,7 +1779,7 @@ fn fetch_quota_snapshots(
     })?;
     let request = HttpRequest {
         method: "POST".into(),
-        url: RETRIEVE_USER_QUOTA_URL.into(),
+        url: RETRIEVE_USER_QUOTA_SUMMARY_URL.into(),
         headers: project_headers(access_token),
         body,
         credential: None,
@@ -1772,7 +1820,7 @@ fn fetch_quota_snapshots(
             format!("invalid quota response JSON: {error}"),
         )
     })?;
-    Ok(Some(parse_quota_snapshots(&value)))
+    Ok(Some(parse_quota_summary_snapshots(&value)))
 }
 
 impl exports::health_probe::Guest for Component {
@@ -1955,11 +2003,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn manifest_opts_in_to_thinking_translation() {
+    fn manifest_declares_health_probe_and_thinking_translation() {
         let manifest = include_str!("../plugin.toml");
         assert!(manifest
             .lines()
             .any(|line| line.trim() == "thinking_translation = true"));
+        assert!(manifest
+            .lines()
+            .any(|line| line.trim() == "health_probes = [\"antigravity-oauth\"]"));
     }
 
     #[test]
@@ -1973,14 +2024,15 @@ mod tests {
     }
 
     #[test]
-    fn quota_response_preserves_scopes_and_unknown_values() {
+    fn quota_response_preserves_scopes_and_fractional_amounts() {
         let snapshots = parse_quota_snapshots(&serde_json::json!({
             "buckets": [
                 {
                     "modelId": "gemini-2.5-pro",
                     "tokenType": "REQUESTS",
                     "remainingFraction": 0.75,
-                    "remainingAmount": "750",
+                    "remainingAmount": "750.5",
+                    "limit": "1000.25",
                     "resetTime": "2026-04-01T00:00:00Z"
                 },
                 {
@@ -1996,6 +2048,7 @@ mod tests {
                 {
                     "modelId": "ignored",
                     "remainingFraction": 1.5,
+                    "remainingAmount": "NaN",
                     "resetTime": "not-a-time"
                 }
             ]
@@ -2007,7 +2060,8 @@ mod tests {
             HealthQuotaScopeV1::Model(model) if model == "gemini-2.5-pro"
         ));
         assert_eq!(snapshots[0].remaining_fraction, Some(0.75));
-        assert_eq!(snapshots[0].remaining, Some(750));
+        assert_eq!(snapshots[0].remaining, Some(750.5));
+        assert_eq!(snapshots[0].limit, Some(1000.25));
         assert_eq!(snapshots[0].unit.as_deref(), Some("requests"));
         assert_eq!(snapshots[0].window, None);
         assert_eq!(
@@ -2015,12 +2069,87 @@ mod tests {
             Some("2026-04-01T00:00:00Z")
         );
         assert_eq!(snapshots[1].remaining_fraction, None);
-        assert_eq!(snapshots[1].remaining, Some(44));
+        assert_eq!(snapshots[1].remaining, Some(44.0));
         assert_eq!(snapshots[1].unit.as_deref(), Some("tokens"));
         assert!(matches!(&snapshots[2].scope, HealthQuotaScopeV1::Unknown));
         assert_eq!(snapshots[2].remaining_fraction, Some(0.0));
         assert_eq!(snapshots[2].unit.as_deref(), Some("requests"));
         assert_eq!(account_quota_fields(&snapshots), (None, None));
+    }
+
+    #[test]
+    fn quota_probe_uses_daily_grouped_summary_endpoint() {
+        assert_eq!(
+            RETRIEVE_USER_QUOTA_SUMMARY_URL,
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+        );
+        assert!(include_str!("../plugin.toml").contains("daily-cloudcode-pa.googleapis.com"));
+    }
+
+    #[test]
+    fn grouped_quota_summary_preserves_group_and_window_without_inventing_scope() {
+        let snapshots = parse_quota_summary_snapshots(&serde_json::json!({
+            "groups": [
+                {
+                    "displayName": "Gemini Models",
+                    "buckets": [
+                        {
+                            "bucketId": "gemini-5h",
+                            "window": "5h",
+                            "remainingFraction": 0.625,
+                            "resetTime": "2026-04-01T05:00:00Z"
+                        },
+                        {
+                            "bucketId": "gemini-weekly",
+                            "window": "weekly",
+                            "remainingFraction": 0.5
+                        }
+                    ]
+                },
+                {
+                    "displayName": "Claude + GPT models",
+                    "buckets": [{
+                        "bucketId": "3p-5h",
+                        "window": "5h",
+                        "remainingFraction": 0.25
+                    }]
+                }
+            ]
+        }));
+
+        assert_eq!(snapshots.len(), 3);
+        assert!(matches!(&snapshots[0].scope, HealthQuotaScopeV1::Unknown));
+        assert_eq!(snapshots[0].group.as_deref(), Some("Gemini Models"));
+        assert_eq!(snapshots[0].bucket_id.as_deref(), Some("gemini-5h"));
+        assert_eq!(snapshots[0].window.as_deref(), Some("5h"));
+        assert_eq!(snapshots[0].remaining_fraction, Some(0.625));
+        assert_eq!(
+            snapshots[0].reset_at.as_deref(),
+            Some("2026-04-01T05:00:00Z")
+        );
+        assert_eq!(snapshots[1].window.as_deref(), Some("weekly"));
+        assert_eq!(snapshots[2].group.as_deref(), Some("Claude + GPT models"));
+        assert_eq!(account_quota_fields(&snapshots), (None, None));
+    }
+
+    #[test]
+    fn parses_nested_quota_summary_groups() {
+        let snapshots = parse_quota_summary_snapshots(&serde_json::json!({
+            "response": {
+                "groups": [{
+                    "displayName": "Gemini Models",
+                    "buckets": [{
+                        "bucketId": "gemini-weekly",
+                        "window": "weekly",
+                        "remainingFraction": 0.8
+                    }]
+                }]
+            }
+        }));
+
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].group.as_deref(), Some("Gemini Models"));
+        assert_eq!(snapshots[0].bucket_id.as_deref(), Some("gemini-weekly"));
     }
 
     #[test]
@@ -2041,6 +2170,8 @@ mod tests {
     fn account_quota_projection_preserves_single_snapshot() {
         let snapshots = vec![HealthQuotaSnapshotV1 {
             scope: HealthQuotaScopeV1::Account,
+            group: None,
+            bucket_id: None,
             remaining_fraction: Some(0.25),
             remaining: None,
             limit: None,
@@ -2060,6 +2191,8 @@ mod tests {
         let snapshots = vec![
             HealthQuotaSnapshotV1 {
                 scope: HealthQuotaScopeV1::Account,
+                group: None,
+                bucket_id: None,
                 remaining_fraction: Some(0.8),
                 remaining: None,
                 limit: None,
@@ -2069,6 +2202,8 @@ mod tests {
             },
             HealthQuotaSnapshotV1 {
                 scope: HealthQuotaScopeV1::Account,
+                group: None,
+                bucket_id: None,
                 remaining_fraction: Some(0.25),
                 remaining: None,
                 limit: None,
