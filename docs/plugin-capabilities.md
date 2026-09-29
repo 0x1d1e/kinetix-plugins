@@ -29,7 +29,7 @@ input = ["openai-chat", "anthropic"]
 upstream = ["plugin-native"]
 ```
 
-Feature fields are required booleans. Protocol values use the normalized transport names: `openai-chat`, `openai-responses`, `anthropic`, `gemini`, and `plugin-native`. `parallel_tools` requires `tools`; `model_discovery` must match whether the integration declares a `model_source`. Older manifests may omit both tables during migration; declaring only one is invalid.
+Feature fields are required booleans. Protocol values use the normalized transport names: `openai-chat`, `openai-responses`, `anthropic`, `gemini`, and `plugin-native`. `protocols.input` is a hard routing allowlist; an empty list permits no inbound protocol. `protocols.upstream` is validated against the configured provider transport when the integration creates or reconciles a provider; `plugin-native` requires a usable bound provider adapter. `parallel_tools` requires `tools`; `model_discovery` must match whether the integration declares a `model_source`. Older manifests may omit both tables during migration; declaring only one is invalid.
 
 ## Per-model metadata
 
