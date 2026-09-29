@@ -54,6 +54,16 @@ fn capability_value(value: &Value) -> Result<ModelCapabilitiesV3, String> {
     ModelCapabilitiesV3::from_json(&raw).map_err(|error| error.to_string())
 }
 
+fn legacy_transport(value: &Value) -> Option<ModelTransportCapability> {
+    let (format, endpoint) = match value.as_str()? {
+        "openai-chat" => (TransportFormat::OpenAiChat, "/zen/v1/chat/completions"),
+        "openai-responses" => (TransportFormat::OpenAiResponses, "/zen/v1/responses"),
+        "anthropic" => (TransportFormat::Anthropic, "/zen/v1/messages"),
+        _ => return None,
+    };
+    Some(ModelTransportCapability::at_endpoint(format, endpoint))
+}
+
 fn model_transport(model: &Value) -> Result<ModelTransportCapability, AdapterError> {
     let mut candidates = Vec::new();
     if let Some(value) = model.get("capabilities_json") {
@@ -67,6 +77,7 @@ fn model_transport(model: &Value) -> Result<ModelTransportCapability, AdapterErr
         Value::String(raw) => serde_json::from_str::<Value>(raw).ok(),
         value => Some(value.clone()),
     });
+    let mut legacy_transports = Vec::new();
     if let Some(discovery) = discovery {
         for pointer in [
             "/kinetix_plugin_capabilities",
@@ -80,6 +91,11 @@ fn model_transport(model: &Value) -> Result<ModelTransportCapability, AdapterErr
         ] {
             if let Some(value) = discovery.pointer(pointer) {
                 candidates.push(value.clone());
+            }
+        }
+        for pointer in ["/transport/format", "/latest_observation/transport/format"] {
+            if let Some(value) = discovery.pointer(pointer) {
+                legacy_transports.push(value.clone());
             }
         }
     }
@@ -100,7 +116,15 @@ fn model_transport(model: &Value) -> Result<ModelTransportCapability, AdapterErr
         }
     }
 
-    if !saw_candidate {
+    // A valid current envelope is authoritative, including an explicit lack
+    // of transport. Only use normalized legacy discovery when there is no
+    // valid capability envelope to supersede it.
+    if !saw_valid_capabilities {
+        if let Some(transport) = legacy_transports.iter().find_map(legacy_transport) {
+            return Ok(transport);
+        }
+    }
+    if !saw_candidate && legacy_transports.is_empty() {
         return Err(err(
             "unsupported_transport",
             "model transport metadata is required",
@@ -1451,6 +1475,58 @@ mod tests {
         )
         .unwrap()
         .ends_with("/zen/v1/messages"));
+    }
+
+    #[test]
+    fn pre_v3_model_rows_keep_using_normalized_transport_metadata() {
+        let provider = r#"{"base_url":"https://opencode.ai"}"#;
+        for discovery in [
+            json!({"transport":{"format":"openai-chat"}}),
+            json!({"latest_observation":{"transport":{"format":"openai-chat"}}}),
+        ] {
+            let model = json!({
+                "id":"model_legacy",
+                "provider_id":"provider_opencode",
+                "upstream_id":"mimo-v2.5-free",
+                "capabilities":"{}",
+                "discovery":discovery.to_string(),
+            })
+            .to_string();
+            assert_eq!(
+                build_url(provider, &model).unwrap(),
+                "https://opencode.ai/zen/v1/chat/completions"
+            );
+        }
+    }
+
+    #[test]
+    fn core_persisted_model_capabilities_keep_v3_transport_endpoint() {
+        let provider = r#"{"base_url":"https://opencode.ai"}"#;
+        let model = json!({
+            "id":"model_v3",
+            "provider_id":"provider_opencode",
+            "upstream_id":"muse-spark",
+            "capabilities":"{}",
+            "discovery":json!({
+                "latest_observation": {
+                    "model_capabilities": {
+                        "schema_version": 3,
+                        "transport": {
+                            "format": "openai-responses",
+                            "endpoint": "/zen/v1/custom-responses",
+                            "alternatives": [{"format": "openai-chat"}]
+                        }
+                    }
+                }
+            })
+            .to_string(),
+        })
+        .to_string();
+
+        assert_eq!(
+            build_url(provider, &model).unwrap(),
+            "https://opencode.ai/zen/v1/custom-responses"
+        );
     }
 
     #[test]
