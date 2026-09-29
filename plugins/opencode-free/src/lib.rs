@@ -347,10 +347,14 @@ impl exports::hooks::Guest for Component {
     }
 }
 
-use kinetix_plugin_sdk::adapter as adapter_world;
+use adapter_world::exports::kinetix::plugin2_0_0::provider_adapter::Guest as ProviderAdapterGuest;
+use kinetix_plugin_sdk::adapter_v2 as adapter_world;
 
-fn adapter_error(e: adapter::AdapterError) -> adapter_world::kinetix::plugin::types::PluginError {
-    adapter_world::kinetix::plugin::types::PluginError {
+type AdapterPluginError = adapter_world::kinetix::plugin1_0_0::types::PluginError;
+type AdapterSessionContext = adapter_world::kinetix::plugin2_0_0::types::SessionContext;
+
+fn adapter_error(e: adapter::AdapterError) -> AdapterPluginError {
+    AdapterPluginError {
         code: e.code,
         message: e.message,
         retryable: e.retryable,
@@ -359,23 +363,20 @@ fn adapter_error(e: adapter::AdapterError) -> adapter_world::kinetix::plugin::ty
     }
 }
 
-impl adapter_world::exports::provider_adapter::Guest for Component {
+impl ProviderAdapterGuest for Component {
     fn wire_format() -> String {
         "opencode-free".into()
     }
 
-    fn build_url(
-        provider_json: String,
-        model_json: String,
-    ) -> Result<String, adapter_world::kinetix::plugin::types::PluginError> {
+    fn build_url(provider_json: String, model_json: String) -> Result<String, AdapterPluginError> {
         adapter::build_url(&provider_json, &model_json).map_err(adapter_error)
     }
 
     fn apply_auth(
         provider_json: String,
         credential: String,
-        session: Option<adapter_world::kinetix::plugin::types::SessionContext>,
-    ) -> Result<String, adapter_world::kinetix::plugin::types::PluginError> {
+        session: Option<AdapterSessionContext>,
+    ) -> Result<String, AdapterPluginError> {
         adapter::apply_auth(
             &provider_json,
             &credential,
@@ -388,8 +389,8 @@ impl adapter_world::exports::provider_adapter::Guest for Component {
         request_json: String,
         provider_json: String,
         model_json: String,
-        _session: Option<adapter_world::kinetix::plugin::types::SessionContext>,
-    ) -> Result<String, adapter_world::kinetix::plugin::types::PluginError> {
+        _session: Option<AdapterSessionContext>,
+    ) -> Result<String, AdapterPluginError> {
         adapter::build_body(&request_json, &provider_json, &model_json).map_err(adapter_error)
     }
 
@@ -397,24 +398,20 @@ impl adapter_world::exports::provider_adapter::Guest for Component {
         status: u16,
         body: String,
         headers_json: String,
-    ) -> Result<String, adapter_world::kinetix::plugin::types::PluginError> {
+    ) -> Result<String, AdapterPluginError> {
         adapter::classify_error(status, &body, &headers_json).map_err(adapter_error)
     }
 
-    fn parse_stream_chunk(
-        data: String,
-    ) -> Result<String, adapter_world::kinetix::plugin::types::PluginError> {
+    fn parse_stream_chunk(data: String) -> Result<String, AdapterPluginError> {
         adapter::parse_stream_chunk(&data).map_err(adapter_error)
     }
 
-    fn parse_full_response(
-        body_json: String,
-    ) -> Result<String, adapter_world::kinetix::plugin::types::PluginError> {
+    fn parse_full_response(body_json: String) -> Result<String, AdapterPluginError> {
         adapter::parse_full_response(&body_json).map_err(adapter_error)
     }
 }
 
-adapter_world::export!(Component with_types_in kinetix_plugin_sdk::adapter);
+adapter_world::export!(Component with_types_in kinetix_plugin_sdk::adapter_v2);
 export!(Component with_types_in kinetix_plugin_sdk);
 
 #[cfg(test)]
@@ -423,8 +420,8 @@ mod tests {
 
     #[test]
     fn adapter_export_reuses_upstream_session_for_a_stable_kinetix_session() {
-        use adapter_world::exports::provider_adapter::Guest;
-        use adapter_world::kinetix::plugin::types::SessionContext;
+        use AdapterSessionContext as SessionContext;
+        use ProviderAdapterGuest as Guest;
 
         let first: serde_json::Value = serde_json::from_str(
             &<Component as Guest>::apply_auth(

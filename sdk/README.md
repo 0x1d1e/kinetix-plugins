@@ -15,6 +15,10 @@ Use `scripts/build-plugin.sh plugins/<plugin>` from the repository root to wrap 
 
 The ABI is the WIT interface, not this crate.
 
+## Session-aware adapter API v2
+
+Keep existing plugins on `plugin_api = "1"` and the `adapter` bindings. Plugins that need opaque session context must use `kinetix_plugin_sdk::adapter_v2` (`plugin-adapter-v2` in `kinetix:plugin@2.0.0`) and declare `plugin_api = "2"`. API v1 WIT and adapter exports remain unchanged; the v2 world reuses v1 host capabilities and plugin types. Hosts can support both adapter worlds concurrently, while v1-only hosts reject API v2 plugins.
+
 ## Normalized model capabilities
 
 Model-source plugins should encode `DiscoveredModel.capabilities_json` with the SDK's strict `ModelCapabilitiesV1` types instead of provider-specific JSON. See [Model capability metadata v1](../docs/model-capabilities-v1.md).
