@@ -1620,7 +1620,7 @@ fn parse_quota_snapshots(value: &serde_json::Value) -> Vec<HealthQuotaSnapshotV1
             let reset_at = bucket
                 .get("resetTime")
                 .and_then(serde_json::Value::as_str)
-                .filter(|value| parse_rfc3339_ms(value).is_some())
+                .filter(|value| kinetix_plugin_sdk::oauth::parse_rfc3339_ms(value).is_some())
                 .map(str::to_string);
 
             // Do not emit a bucket that contains no quota measurement or reset
@@ -1700,7 +1700,7 @@ fn fetch_quota_snapshots(
             credential
                 .expiry
                 .as_deref()
-                .and_then(parse_rfc3339_ms)
+                .and_then(kinetix_plugin_sdk::oauth::parse_rfc3339_ms)
                 .is_some_and(|expiry| expiry > now)
         })
         .ok_or_else(|| {
@@ -1960,6 +1960,16 @@ mod tests {
         assert!(manifest
             .lines()
             .any(|line| line.trim() == "thinking_translation = true"));
+    }
+
+    #[test]
+    fn parses_rfc3339_reset_instants_with_offsets_and_fractions() {
+        let parse = kinetix_plugin_sdk::oauth::parse_rfc3339_ms;
+        let utc = parse("2026-04-01T00:00:00Z").unwrap();
+        assert_eq!(parse("2026-04-01T02:00:00+02:00"), Some(utc));
+        assert_eq!(parse("2026-04-01T00:00:00.125Z"), Some(utc + 125));
+        assert_eq!(parse("2026-02-30T00:00:00Z"), None);
+        assert_eq!(parse("2026-04-01T00:00:00Zjunk"), None);
     }
 
     #[test]
