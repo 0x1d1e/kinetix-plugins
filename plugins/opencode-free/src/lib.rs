@@ -212,6 +212,15 @@ fn normalized_capabilities(entry: Option<&CatalogEntry>) -> Result<String, Plugi
     })
 }
 
+fn raw_metadata_with_capabilities(item: &Value, capabilities_json: &str) -> Option<String> {
+    let mut metadata = item.clone();
+    let capabilities = serde_json::from_str(capabilities_json).ok()?;
+    metadata
+        .as_object_mut()?
+        .insert("kinetix_plugin_capabilities".into(), capabilities);
+    serde_json::to_string(&metadata).ok()
+}
+
 fn parse_model_list(value: &Value) -> Result<Vec<DiscoveredModel>, PluginError> {
     let Some(data) = value.get("data").and_then(Value::as_array) else {
         return Ok(Vec::new());
@@ -250,8 +259,9 @@ fn parse_model_list(value: &Value) -> Result<Vec<DiscoveredModel>, PluginError> 
                 .or_else(|| item.get("maxOutputTokens"))
                 .and_then(Value::as_u64)
                 .or_else(|| entry.as_ref().and_then(|entry| entry.max_output_tokens)),
+            raw_metadata: raw_metadata_with_capabilities(item, &capabilities_json)
+                .or_else(|| serde_json::to_string(item).ok()),
             capabilities_json: Some(capabilities_json),
-            raw_metadata: serde_json::to_string(item).ok(),
         });
     }
 
@@ -560,6 +570,23 @@ mod tests {
                 "muse-spark-1.3-contributor-free"
             ]
         );
+    }
+
+    #[test]
+    fn raw_metadata_preserves_normalized_capabilities_for_model_rows() {
+        let value = serde_json::json!({
+            "data": [{"id":"union-alpha","name":"Union Alpha"}]
+        });
+        let model = parse_model_list(&value).unwrap().remove(0);
+        let raw_metadata: Value =
+            serde_json::from_str(model.raw_metadata.as_deref().unwrap()).unwrap();
+        let capabilities =
+            ModelCapabilitiesV3::from_json(model.capabilities_json.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            raw_metadata["kinetix_plugin_capabilities"],
+            serde_json::to_value(capabilities).unwrap()
+        );
+        assert_eq!(raw_metadata["id"], "union-alpha");
     }
 
     #[test]

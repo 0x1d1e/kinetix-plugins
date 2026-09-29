@@ -36,6 +36,11 @@ impl IntegrationFeaturesV1 {
                 self.schema_version, INTEGRATION_FEATURES_SCHEMA_V1
             )));
         }
+        if self.parallel_tools && !self.tools {
+            return Err(IntegrationFeaturesError::validation(
+                "parallel_tools requires tools",
+            ));
+        }
         Ok(())
     }
 
@@ -219,6 +224,16 @@ mod tests {
             r#"{"schema_version":2,"streaming":true,"tools":true,"parallel_tools":true,"vision":true,"reasoning":true,"structured_output":true,"model_discovery":true,"quota_probe":false,"health_probe":false}"#
         )
         .is_err());
+    }
+
+    #[test]
+    fn parallel_tools_requires_tools() {
+        let mut features = features();
+        features.tools = false;
+        assert!(features.validate().is_err());
+
+        features.parallel_tools = false;
+        assert!(features.validate().is_ok());
     }
 
     #[test]

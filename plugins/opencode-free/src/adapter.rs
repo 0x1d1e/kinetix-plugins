@@ -46,32 +46,79 @@ fn model_id(model: &Value) -> Option<&str> {
         .filter(|v| !v.is_empty())
 }
 
+fn capability_value(value: &Value) -> Result<ModelCapabilitiesV3, String> {
+    let raw = match value {
+        Value::String(raw) => raw.clone(),
+        value => serde_json::to_string(value).map_err(|error| error.to_string())?,
+    };
+    ModelCapabilitiesV3::from_json(&raw).map_err(|error| error.to_string())
+}
+
 fn model_transport(model: &Value) -> Result<ModelTransportCapability, AdapterError> {
-    let raw = model
-        .get("capabilities_json")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .or_else(|| {
-            model
-                .get("capabilities")
-                .filter(|capabilities| capabilities.is_object())
-                .and_then(|capabilities| serde_json::to_string(capabilities).ok())
-        })
-        .ok_or_else(|| {
-            err(
-                "unsupported_transport",
-                "model transport metadata is required",
-            )
-        })?;
-    let capabilities = ModelCapabilitiesV3::from_json(&raw).map_err(|error| {
-        err(
+    let mut candidates = Vec::new();
+    if let Some(value) = model.get("capabilities_json") {
+        candidates.push(value.clone());
+    }
+    if let Some(value) = model.get("capabilities") {
+        candidates.push(value.clone());
+    }
+
+    let discovery = model.get("discovery").and_then(|value| match value {
+        Value::String(raw) => serde_json::from_str::<Value>(raw).ok(),
+        value => Some(value.clone()),
+    });
+    if let Some(discovery) = discovery {
+        for pointer in [
+            "/kinetix_plugin_capabilities",
+            "/model_capabilities",
+            "/capabilities_json",
+            "/latest_observation/kinetix_plugin_capabilities",
+            "/latest_observation/model_capabilities",
+            "/latest_observation/capabilities_json",
+            "/latest_observation/raw_metadata/kinetix_plugin_capabilities",
+            "/raw_metadata/kinetix_plugin_capabilities",
+        ] {
+            if let Some(value) = discovery.pointer(pointer) {
+                candidates.push(value.clone());
+            }
+        }
+    }
+
+    let mut saw_candidate = false;
+    let mut saw_valid_capabilities = false;
+    let mut parse_error = None;
+    for candidate in candidates {
+        saw_candidate = true;
+        match capability_value(&candidate) {
+            Ok(capabilities) => {
+                saw_valid_capabilities = true;
+                if let Some(transport) = capabilities.transport {
+                    return Ok(transport);
+                }
+            }
+            Err(error) => parse_error = Some(error),
+        }
+    }
+
+    if !saw_candidate {
+        return Err(err(
             "unsupported_transport",
-            format!("invalid model transport metadata: {error}"),
-        )
-    })?;
-    capabilities
-        .transport
-        .ok_or_else(|| err("unsupported_transport", "model transport is not declared"))
+            "model transport metadata is required",
+        ));
+    }
+    if saw_valid_capabilities {
+        return Err(err(
+            "unsupported_transport",
+            "model transport is not declared",
+        ));
+    }
+    Err(err(
+        "unsupported_transport",
+        format!(
+            "invalid model transport metadata: {}",
+            parse_error.unwrap_or_else(|| "unknown metadata error".into())
+        ),
+    ))
 }
 
 pub fn build_url(provider_json: &str, model_json: &str) -> Result<String, AdapterError> {
@@ -1310,6 +1357,36 @@ mod tests {
         test_model(id, TransportFormat::Anthropic, "/zen/v1/messages")
     }
 
+    fn production_model_row(id: &str, format: TransportFormat, endpoint: &str) -> String {
+        let mut capabilities = ModelCapabilitiesV3::default();
+        capabilities.transport = Some(ModelTransportCapability::at_endpoint(format, endpoint));
+        json!({
+            "id":"model_123",
+            "provider_id":"provider_123",
+            "upstream_id":id,
+            "display_name":id,
+            "enabled":1,
+            "context_window":null,
+            "max_output_tokens":null,
+            "capabilities":"{}",
+            "prices":"{}",
+            "parameters":"{}",
+            "thinking_map":"{}",
+            "extra_request":"{}",
+            "discovery":json!({
+                "latest_observation":{
+                    "raw_metadata":{
+                        "id":id,
+                        "kinetix_plugin_capabilities":capabilities
+                    }
+                }
+            }).to_string(),
+            "created_at":"2026-01-01T00:00:00Z",
+            "opaque_state_plugin":""
+        })
+        .to_string()
+    }
+
     fn chat_body(messages: Value) -> Result<Value, AdapterError> {
         let request = serde_json::json!({
             "requested_model": "mimo-v2.5-free",
@@ -1359,6 +1436,21 @@ mod tests {
             build_url(provider, &selected).unwrap(),
             "https://opencode.ai/custom/messages"
         );
+    }
+
+    #[test]
+    fn production_model_row_uses_capabilities_from_discovery_json_string() {
+        let provider = r#"{"base_url":"https://opencode.ai"}"#;
+        assert!(build_url(
+            provider,
+            &production_model_row(
+                "union-alpha",
+                TransportFormat::Anthropic,
+                "/zen/v1/messages"
+            )
+        )
+        .unwrap()
+        .ends_with("/zen/v1/messages"));
     }
 
     #[test]
