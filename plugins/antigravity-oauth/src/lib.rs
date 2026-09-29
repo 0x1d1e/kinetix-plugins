@@ -47,6 +47,8 @@ const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const USERINFO_URL: &str = "https://www.googleapis.com/oauth2/v1/userinfo";
 const LOAD_CODE_ASSIST_URL: &str = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
 const ONBOARD_USER_URL: &str = "https://cloudcode-pa.googleapis.com/v1internal:onboardUser";
+const RETRIEVE_USER_QUOTA_URL: &str =
+    "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota";
 const RETRIEVE_USER_QUOTA_SUMMARY_URL: &str =
     "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
 const PROJECT_KEY_PREFIX: &str = "project:";
@@ -1604,20 +1606,29 @@ fn normalize_quota_unit(value: &str) -> Option<String> {
 fn parse_quota_bucket(
     bucket: &serde_json::Value,
     group: Option<&str>,
+    force_exhausted: bool,
 ) -> Option<HealthQuotaSnapshotV1> {
     let model_id = bucket
         .get("modelId")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|model| !model.is_empty());
-    let remaining_fraction = bucket
-        .get("remainingFraction")
-        .and_then(serde_json::Value::as_f64)
-        .filter(|fraction| fraction.is_finite() && (0.0..=1.0).contains(fraction));
-    let remaining = bucket
-        .get("remainingAmount")
-        .or_else(|| bucket.get("remaining"))
-        .and_then(quota_amount);
+    let remaining_fraction = if force_exhausted {
+        Some(0.0)
+    } else {
+        bucket
+            .get("remainingFraction")
+            .and_then(serde_json::Value::as_f64)
+            .filter(|fraction| fraction.is_finite() && (0.0..=1.0).contains(fraction))
+    };
+    let remaining = if force_exhausted {
+        Some(0.0)
+    } else {
+        bucket
+            .get("remainingAmount")
+            .or_else(|| bucket.get("remaining"))
+            .and_then(quota_amount)
+    };
     let limit = bucket.get("limit").and_then(quota_amount);
     let reset_at = bucket
         .get("resetTime")
@@ -1672,13 +1683,54 @@ fn parse_quota_snapshots(value: &serde_json::Value) -> Vec<HealthQuotaSnapshotV1
         .and_then(serde_json::Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(|bucket| parse_quota_bucket(bucket, None))
+        .filter_map(|bucket| parse_quota_bucket(bucket, None, false))
         .collect()
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum QuotaWindowKind {
+    Weekly,
+    Session,
+}
+
+fn quota_window_kind(bucket: &serde_json::Value) -> Option<QuotaWindowKind> {
+    let window = bucket
+        .get("window")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    let labels = ["bucketId", "displayName"]
+        .into_iter()
+        .filter_map(|key| bucket.get(key).and_then(serde_json::Value::as_str))
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase();
+
+    if window == "weekly" || labels.contains("weekly") {
+        Some(QuotaWindowKind::Weekly)
+    } else if matches!(
+        window.as_str(),
+        "5h" | "daily" | "session" | "5-hour" | "5 hour"
+    ) || ["5h", "daily", "session", "five hour"]
+        .iter()
+        .any(|label| labels.contains(label))
+    {
+        Some(QuotaWindowKind::Session)
+    } else {
+        None
+    }
 }
 
 fn parse_quota_summary_snapshots(value: &serde_json::Value) -> Vec<HealthQuotaSnapshotV1> {
     let response = value.get("response").unwrap_or(value);
-    if let Some(groups) = response.get("groups").and_then(serde_json::Value::as_array) {
+    let groups = response
+        .get("groups")
+        .or_else(|| value.get("groups"))
+        .or_else(|| response.pointer("/quotaSummary/groups"))
+        .or_else(|| value.pointer("/quotaSummary/groups"))
+        .and_then(serde_json::Value::as_array);
+    if let Some(groups) = groups {
         return groups
             .iter()
             .flat_map(|group| {
@@ -1692,12 +1744,31 @@ fn parse_quota_summary_snapshots(value: &serde_json::Value) -> Vec<HealthQuotaSn
                     .and_then(serde_json::Value::as_array)
                     .into_iter()
                     .flatten()
-                    .filter_map(move |bucket| parse_quota_bucket(bucket, display_name))
+                    .filter_map(move |bucket| {
+                        let disabled = bucket.get("disabled").and_then(serde_json::Value::as_bool)
+                            == Some(true);
+                        let force_exhausted = if disabled {
+                            match quota_window_kind(bucket) {
+                                Some(QuotaWindowKind::Weekly) | None => return None,
+                                Some(QuotaWindowKind::Session) => true,
+                            }
+                        } else {
+                            false
+                        };
+                        parse_quota_bucket(bucket, display_name, force_exhausted)
+                    })
             })
             .collect();
     }
 
     parse_quota_snapshots(response)
+}
+
+fn merge_quota_snapshots(
+    summary: Vec<HealthQuotaSnapshotV1>,
+    model: Vec<HealthQuotaSnapshotV1>,
+) -> Vec<HealthQuotaSnapshotV1> {
+    summary.into_iter().chain(model).collect()
 }
 
 fn account_quota_fields(snapshots: &[HealthQuotaSnapshotV1]) -> (Option<String>, Option<String>) {
@@ -1728,6 +1799,62 @@ fn quota_probe_error(error: PluginError) -> HealthPluginError {
         retry_after: error.retry_after,
         reset_at: error.reset_at,
     }
+}
+
+fn fetch_quota_response(
+    access_token: &str,
+    project_id: &str,
+    url: &str,
+) -> Result<serde_json::Value, PluginError> {
+    let body = serde_json::to_vec(&serde_json::json!({ "project": project_id })).map_err(|e| {
+        kinetix_plugin_sdk::helpers::error(
+            "plugin_internal",
+            format!("encoding quota request: {e}"),
+        )
+    })?;
+    let request = HttpRequest {
+        method: "POST".into(),
+        url: url.into(),
+        headers: project_headers(access_token),
+        body,
+        credential: None,
+    };
+    let response = kinetix::plugin::host_http::send(&request).map_err(|error| {
+        kinetix_plugin_sdk::helpers::retryable_error(&error.code, error.message, error.retry_after)
+    })?;
+    if response.body_truncated {
+        return Err(kinetix_plugin_sdk::helpers::retryable_error(
+            "upstream_unavailable",
+            "quota response truncated",
+            Some(5),
+        ));
+    }
+    if !(200..300).contains(&response.status) {
+        let message = format!("quota endpoint returned HTTP {}", response.status);
+        return Err(match response.status {
+            401 => kinetix_plugin_sdk::helpers::error("credential_expired", message),
+            429 => kinetix_plugin_sdk::helpers::retryable_error(
+                "upstream_unavailable",
+                message,
+                Some(5),
+            ),
+            status if status >= 500 => kinetix_plugin_sdk::helpers::retryable_error(
+                "upstream_unavailable",
+                message,
+                Some(5),
+            ),
+            _ => kinetix_plugin_sdk::helpers::error("upstream_unavailable", message),
+        });
+    }
+    let text = String::from_utf8(response.body).map_err(|_| {
+        kinetix_plugin_sdk::helpers::error("protocol_error", "quota response is not UTF-8")
+    })?;
+    serde_json::from_str(&text).map_err(|error| {
+        kinetix_plugin_sdk::helpers::error(
+            "protocol_error",
+            format!("invalid quota response JSON: {error}"),
+        )
+    })
 }
 
 fn fetch_quota_snapshots(
@@ -1771,56 +1898,22 @@ fn fetch_quota_snapshots(
         return Ok(None);
     };
 
-    let body = serde_json::to_vec(&serde_json::json!({ "project": project_id })).map_err(|e| {
-        kinetix_plugin_sdk::helpers::error(
-            "plugin_internal",
-            format!("encoding quota request: {e}"),
-        )
-    })?;
-    let request = HttpRequest {
-        method: "POST".into(),
-        url: RETRIEVE_USER_QUOTA_SUMMARY_URL.into(),
-        headers: project_headers(access_token),
-        body,
-        credential: None,
+    // Keep the daily grouped summary first: it carries current family windows.
+    // The older RPC supplements it with model-specific buckets. Either source
+    // may be unavailable independently without discarding the other's evidence.
+    let summary_result =
+        fetch_quota_response(access_token, &project_id, RETRIEVE_USER_QUOTA_SUMMARY_URL);
+    let model_result = fetch_quota_response(access_token, &project_id, RETRIEVE_USER_QUOTA_URL);
+    let snapshots = match (summary_result, model_result) {
+        (Ok(summary), Ok(model)) => merge_quota_snapshots(
+            parse_quota_summary_snapshots(&summary),
+            parse_quota_snapshots(&model),
+        ),
+        (Ok(summary), Err(_)) => parse_quota_summary_snapshots(&summary),
+        (Err(_), Ok(model)) => parse_quota_snapshots(&model),
+        (Err(summary_error), Err(_)) => return Err(summary_error),
     };
-    let response = kinetix::plugin::host_http::send(&request).map_err(|error| {
-        kinetix_plugin_sdk::helpers::retryable_error(&error.code, error.message, error.retry_after)
-    })?;
-    if response.body_truncated {
-        return Err(kinetix_plugin_sdk::helpers::retryable_error(
-            "upstream_unavailable",
-            "quota response truncated",
-            Some(5),
-        ));
-    }
-    if !(200..300).contains(&response.status) {
-        let message = format!("quota endpoint returned HTTP {}", response.status);
-        return Err(match response.status {
-            401 => kinetix_plugin_sdk::helpers::error("credential_expired", message),
-            429 => kinetix_plugin_sdk::helpers::retryable_error(
-                "upstream_unavailable",
-                message,
-                Some(5),
-            ),
-            status if status >= 500 => kinetix_plugin_sdk::helpers::retryable_error(
-                "upstream_unavailable",
-                message,
-                Some(5),
-            ),
-            _ => kinetix_plugin_sdk::helpers::error("upstream_unavailable", message),
-        });
-    }
-    let text = String::from_utf8(response.body).map_err(|_| {
-        kinetix_plugin_sdk::helpers::error("protocol_error", "quota response is not UTF-8")
-    })?;
-    let value = serde_json::from_str(&text).map_err(|error| {
-        kinetix_plugin_sdk::helpers::error(
-            "protocol_error",
-            format!("invalid quota response JSON: {error}"),
-        )
-    })?;
-    Ok(Some(parse_quota_summary_snapshots(&value)))
+    Ok(Some(snapshots))
 }
 
 impl exports::health_probe::Guest for Component {
@@ -2083,7 +2176,12 @@ mod tests {
             RETRIEVE_USER_QUOTA_SUMMARY_URL,
             "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
         );
+        assert_eq!(
+            RETRIEVE_USER_QUOTA_URL,
+            "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota"
+        );
         assert!(include_str!("../plugin.toml").contains("daily-cloudcode-pa.googleapis.com"));
+        assert!(include_str!("../plugin.toml").contains("cloudcode-pa.googleapis.com"));
     }
 
     #[test]
@@ -2150,6 +2248,89 @@ mod tests {
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].group.as_deref(), Some("Gemini Models"));
         assert_eq!(snapshots[0].bucket_id.as_deref(), Some("gemini-weekly"));
+    }
+
+    #[test]
+    fn parses_quota_summary_groups_envelope() {
+        let snapshots = parse_quota_summary_snapshots(&serde_json::json!({
+            "quotaSummary": {
+                "groups": [{
+                    "displayName": "Gemini Models",
+                    "buckets": [{
+                        "bucketId": "gemini-weekly",
+                        "window": "weekly",
+                        "remainingFraction": 0.8
+                    }]
+                }]
+            }
+        }));
+
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].group.as_deref(), Some("Gemini Models"));
+        assert_eq!(snapshots[0].bucket_id.as_deref(), Some("gemini-weekly"));
+        assert_eq!(snapshots[0].remaining_fraction, Some(0.8));
+    }
+
+    #[test]
+    fn disabled_quota_buckets_follow_window_semantics() {
+        let snapshots = parse_quota_summary_snapshots(&serde_json::json!({
+            "groups": [{
+                "displayName": "Gemini Models",
+                "buckets": [
+                    {
+                        "bucketId": "gemini-5h",
+                        "window": "5h",
+                        "disabled": true,
+                        "remainingFraction": 0.75,
+                        "remainingAmount": "750"
+                    },
+                    {
+                        "bucketId": "gemini-weekly",
+                        "window": "weekly",
+                        "disabled": true,
+                        "remainingFraction": 0.5
+                    },
+                    {
+                        "bucketId": "unrecognized",
+                        "disabled": true,
+                        "remainingFraction": 0.9
+                    }
+                ]
+            }]
+        }));
+
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].window.as_deref(), Some("5h"));
+        assert_eq!(snapshots[0].remaining_fraction, Some(0.0));
+        assert_eq!(snapshots[0].remaining, Some(0.0));
+    }
+
+    #[test]
+    fn grouped_and_model_quota_sources_are_merged() {
+        let summary = parse_quota_summary_snapshots(&serde_json::json!({
+            "groups": [{
+                "displayName": "Gemini Models",
+                "buckets": [{
+                    "bucketId": "gemini-weekly",
+                    "window": "weekly",
+                    "remainingFraction": 0.8
+                }]
+            }]
+        }));
+        let model = parse_quota_snapshots(&serde_json::json!({
+            "buckets": [{
+                "modelId": "gemini-2.5-pro",
+                "remainingFraction": 0.4
+            }]
+        }));
+
+        let snapshots = merge_quota_snapshots(summary, model);
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].group.as_deref(), Some("Gemini Models"));
+        assert!(matches!(
+            &snapshots[1].scope,
+            HealthQuotaScopeV1::Model(model) if model == "gemini-2.5-pro"
+        ));
     }
 
     #[test]

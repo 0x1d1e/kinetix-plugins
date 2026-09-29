@@ -7,7 +7,7 @@ Kinetix plugin for Google Antigravity / Cloud Code Assist. It provides:
 - account-aware model discovery and structured quota health observations;
 - the `antigravity` (`v1internal`) provider adapter.
 
-Quota probes call Antigravity's unstable `retrieveUserQuotaSummary` RPC on `daily-cloudcode-pa.googleapis.com`. Grouped short-window and weekly buckets retain provider group, bucket, and window labels. Buckets without an exact model ID stay unknown-scoped; absent measurements stay unknown. Probes do not onboard accounts when no project ID is cached.
+Quota probes prefer Antigravity's unstable `retrieveUserQuotaSummary` RPC on `daily-cloudcode-pa.googleapis.com` for grouped short-window and weekly buckets, then supplement it with per-model buckets from `retrieveUserQuota` on `cloudcode-pa.googleapis.com`. Either source may fail without discarding the other's evidence. Grouped buckets retain provider group, bucket, and window labels; disabled weekly buckets are omitted, while disabled 5h/session buckets report zero remaining. Buckets without an exact model ID stay unknown-scoped; absent measurements stay unknown. Probes do not onboard accounts when no project ID is cached.
 
 ## Connect from Kinetix
 
