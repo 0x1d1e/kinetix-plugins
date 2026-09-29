@@ -1798,6 +1798,28 @@ fn account_quota_fields(snapshots: &[HealthQuotaSnapshotV1]) -> (Option<String>,
     )
 }
 
+/// Core treats legacy `healthy` as recovery, so quota success is insufficient
+/// without an explicitly account-wide bucket reporting positive headroom.
+fn quota_health_state(snapshots: &[HealthQuotaSnapshotV1]) -> &'static str {
+    let mut account_snapshots = snapshots
+        .iter()
+        .filter(|snapshot| matches!(&snapshot.scope, HealthQuotaScopeV1::Account));
+    let Some(snapshot) = account_snapshots.next() else {
+        return "unknown";
+    };
+    if account_snapshots.next().is_some()
+        || !snapshot
+            .remaining_fraction
+            .is_some_and(|remaining| remaining > 0.0)
+    {
+        // Successful quota RPCs and scoped/empty quota evidence do not prove
+        // account recovery. Core treats legacy `healthy` as clearing cooldowns.
+        return "unknown";
+    }
+
+    "healthy"
+}
+
 fn quota_probe_error(error: PluginError) -> HealthPluginError {
     HealthPluginError {
         code: error.code,
@@ -2008,7 +2030,7 @@ impl exports::health_probe::Guest for Component {
         };
         let (quota_state, reset_at) = account_quota_fields(&snapshots);
         Ok(HealthObservation {
-            state: "healthy".into(),
+            state: quota_health_state(&snapshots).into(),
             quota_state,
             reset_at,
             retry_after: None,
@@ -2036,7 +2058,7 @@ impl health_world::exports::health_probe_v2::Guest for Component {
         };
         let (quota_state, reset_at) = account_quota_fields(&quota_snapshots);
         Ok(HealthObservationV2 {
-            state: "healthy".into(),
+            state: quota_health_state(&quota_snapshots).into(),
             quota_state,
             reset_at,
             retry_after: None,
@@ -2381,6 +2403,7 @@ mod tests {
         assert_eq!(snapshots[1].window.as_deref(), Some("weekly"));
         assert_eq!(snapshots[2].group.as_deref(), Some("Claude + GPT models"));
         assert_eq!(account_quota_fields(&snapshots), (None, None));
+        assert_eq!(quota_health_state(&snapshots), "unknown");
     }
 
     #[test]
@@ -2507,6 +2530,7 @@ mod tests {
 
         let snapshots = merge_quota_snapshots(summary, model);
         assert_eq!(snapshots.len(), 2);
+        assert_eq!(quota_health_state(&snapshots), "unknown");
         assert_eq!(snapshots[0].group.as_deref(), Some("Gemini Models"));
         assert!(matches!(
             &snapshots[1].scope,
@@ -2525,6 +2549,7 @@ mod tests {
         }));
 
         assert_eq!(account_quota_fields(&snapshots), (None, None));
+        assert_eq!(quota_health_state(&snapshots), "unknown");
         assert!(parse_quota_snapshots(&serde_json::json!({})).is_empty());
     }
 
@@ -2546,6 +2571,26 @@ mod tests {
             account_quota_fields(&snapshots),
             (Some("0.25".into()), Some("2026-04-01T00:00:00Z".into()))
         );
+        assert_eq!(quota_health_state(&snapshots), "healthy");
+    }
+
+    #[test]
+    fn account_quota_without_positive_headroom_does_not_claim_recovery() {
+        for remaining_fraction in [None, Some(0.0)] {
+            let snapshots = vec![HealthQuotaSnapshotV1 {
+                scope: HealthQuotaScopeV1::Account,
+                group: None,
+                bucket_id: None,
+                remaining_fraction,
+                remaining: None,
+                limit: None,
+                unit: Some("requests".into()),
+                window: Some("5h".into()),
+                reset_at: None,
+            }];
+
+            assert_eq!(quota_health_state(&snapshots), "unknown");
+        }
     }
 
     #[test]
@@ -2576,6 +2621,7 @@ mod tests {
         ];
 
         assert_eq!(account_quota_fields(&snapshots), (None, None));
+        assert_eq!(quota_health_state(&snapshots), "unknown");
     }
 
     #[test]
