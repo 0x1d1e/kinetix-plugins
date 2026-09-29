@@ -1635,7 +1635,7 @@ fn parse_quota_bucket(
     let reset_at = bucket
         .get("resetTime")
         .and_then(serde_json::Value::as_str)
-        .filter(|value| parse_rfc3339_ms(value).is_some())
+        .filter(|value| kinetix_plugin_sdk::oauth::parse_rfc3339_ms(value).is_some())
         .map(str::to_string);
 
     // Do not emit a bucket that contains no quota measurement or reset
