@@ -47,10 +47,12 @@ const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const USERINFO_URL: &str = "https://www.googleapis.com/oauth2/v1/userinfo";
 const LOAD_CODE_ASSIST_URL: &str = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
 const ONBOARD_USER_URL: &str = "https://cloudcode-pa.googleapis.com/v1internal:onboardUser";
-const RETRIEVE_USER_QUOTA_URL: &str =
-    "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota";
-const RETRIEVE_USER_QUOTA_SUMMARY_URL: &str =
-    "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
+const ANTIGRAVITY_RUNTIME_BASE_URLS: [&str; 2] = [
+    "https://daily-cloudcode-pa.googleapis.com",
+    "https://cloudcode-pa.googleapis.com",
+];
+const RETRIEVE_USER_QUOTA_RPC: &str = "retrieveUserQuota";
+const RETRIEVE_USER_QUOTA_SUMMARY_RPC: &str = "retrieveUserQuotaSummary";
 const PROJECT_KEY_PREFIX: &str = "project:";
 const ANTIGRAVITY_SCOPES: &[&str] = &[
     "https://www.googleapis.com/auth/cloud-platform",
@@ -1672,7 +1674,12 @@ fn parse_quota_bucket(
         remaining,
         limit,
         unit,
-        window: optional_label("window"),
+        window: optional_label("window").or_else(|| {
+            quota_window_kind(bucket).map(|kind| match kind {
+                QuotaWindowKind::Weekly => "weekly".into(),
+                QuotaWindowKind::Session => "5h".into(),
+            })
+        }),
         reset_at,
     })
 }
@@ -1712,7 +1719,7 @@ fn quota_window_kind(bucket: &serde_json::Value) -> Option<QuotaWindowKind> {
     } else if matches!(
         window.as_str(),
         "5h" | "daily" | "session" | "5-hour" | "5 hour"
-    ) || ["5h", "daily", "session", "five hour"]
+    ) || ["5h", "5-hour", "5 hour", "daily", "session", "five hour"]
         .iter()
         .any(|label| labels.contains(label))
     {
@@ -1801,11 +1808,15 @@ fn quota_probe_error(error: PluginError) -> HealthPluginError {
     }
 }
 
-fn fetch_quota_response(
+fn quota_rpc_urls(method: &str) -> [String; 2] {
+    ANTIGRAVITY_RUNTIME_BASE_URLS.map(|base_url| format!("{base_url}/v1internal:{method}"))
+}
+
+fn fetch_quota_response_from_url(
     access_token: &str,
     project_id: &str,
     url: &str,
-) -> Result<serde_json::Value, PluginError> {
+) -> Result<Option<serde_json::Value>, PluginError> {
     let body = serde_json::to_vec(&serde_json::json!({ "project": project_id })).map_err(|e| {
         kinetix_plugin_sdk::helpers::error(
             "plugin_internal",
@@ -1822,15 +1833,13 @@ fn fetch_quota_response(
     let response = kinetix::plugin::host_http::send(&request).map_err(|error| {
         kinetix_plugin_sdk::helpers::retryable_error(&error.code, error.message, error.retry_after)
     })?;
-    if response.body_truncated {
-        return Err(kinetix_plugin_sdk::helpers::retryable_error(
-            "upstream_unavailable",
-            "quota response truncated",
-            Some(5),
-        ));
+    if response.status == 404 {
+        // This host may not expose the internal RPC. Try the next runtime host;
+        // if all hosts return 404, the RPC contributes unknown quota evidence.
+        return Ok(None);
     }
     if !(200..300).contains(&response.status) {
-        let message = format!("quota endpoint returned HTTP {}", response.status);
+        let message = format!("quota endpoint {url} returned HTTP {}", response.status);
         return Err(match response.status {
             401 => kinetix_plugin_sdk::helpers::error("credential_expired", message),
             429 => kinetix_plugin_sdk::helpers::retryable_error(
@@ -1846,15 +1855,94 @@ fn fetch_quota_response(
             _ => kinetix_plugin_sdk::helpers::error("upstream_unavailable", message),
         });
     }
+    if response.body_truncated {
+        return Err(kinetix_plugin_sdk::helpers::retryable_error(
+            "upstream_unavailable",
+            format!("quota response from {url} was truncated"),
+            Some(5),
+        ));
+    }
     let text = String::from_utf8(response.body).map_err(|_| {
-        kinetix_plugin_sdk::helpers::error("protocol_error", "quota response is not UTF-8")
-    })?;
-    serde_json::from_str(&text).map_err(|error| {
         kinetix_plugin_sdk::helpers::error(
             "protocol_error",
-            format!("invalid quota response JSON: {error}"),
+            format!("quota response from {url} is not UTF-8"),
         )
+    })?;
+    let value = serde_json::from_str(&text).map_err(|error| {
+        kinetix_plugin_sdk::helpers::error(
+            "protocol_error",
+            format!("invalid quota response JSON from {url}: {error}"),
+        )
+    })?;
+    Ok(Some(value))
+}
+
+fn prefer_quota_error(current: PluginError, candidate: PluginError) -> PluginError {
+    if candidate.code == "credential_expired" && current.code != "credential_expired" {
+        return candidate;
+    }
+    if current.code == "credential_expired" {
+        return current;
+    }
+    if candidate.retryable && !current.retryable {
+        candidate
+    } else {
+        // Keep the earlier error when priorities tie. Calls are ordered by
+        // preferred runtime host and quota-summary source.
+        current
+    }
+}
+
+fn first_available_quota_response<T>(
+    urls: [String; 2],
+    mut fetch: impl FnMut(&str) -> Result<Option<T>, PluginError>,
+) -> Result<Option<T>, PluginError> {
+    let mut last_error = None;
+    for url in urls {
+        match fetch(&url) {
+            Ok(Some(response)) => return Ok(Some(response)),
+            Ok(None) => {}
+            Err(error) => {
+                last_error = Some(match last_error.take() {
+                    Some(previous) => prefer_quota_error(previous, error),
+                    None => error,
+                });
+            }
+        }
+    }
+    match last_error {
+        Some(error) => Err(error),
+        None => Ok(None),
+    }
+}
+
+fn fetch_quota_response(
+    access_token: &str,
+    project_id: &str,
+    method: &str,
+) -> Result<Option<serde_json::Value>, PluginError> {
+    first_available_quota_response(quota_rpc_urls(method), |url| {
+        fetch_quota_response_from_url(access_token, project_id, url)
     })
+}
+
+fn combine_quota_responses(
+    summary: Result<Option<serde_json::Value>, PluginError>,
+    model: Result<Option<serde_json::Value>, PluginError>,
+) -> Result<Option<Vec<HealthQuotaSnapshotV1>>, PluginError> {
+    match (summary, model) {
+        (Ok(Some(summary)), Ok(Some(model))) => Ok(Some(merge_quota_snapshots(
+            parse_quota_summary_snapshots(&summary),
+            parse_quota_snapshots(&model),
+        ))),
+        (Ok(Some(summary)), _) => Ok(Some(parse_quota_summary_snapshots(&summary))),
+        (_, Ok(Some(model))) => Ok(Some(parse_quota_snapshots(&model))),
+        (Ok(None), Ok(None)) => Ok(None),
+        (Err(summary_error), Err(model_error)) => {
+            Err(prefer_quota_error(summary_error, model_error))
+        }
+        (Err(error), Ok(None)) | (Ok(None), Err(error)) => Err(error),
+    }
 }
 
 fn fetch_quota_snapshots(
@@ -1902,18 +1990,9 @@ fn fetch_quota_snapshots(
     // The older RPC supplements it with model-specific buckets. Either source
     // may be unavailable independently without discarding the other's evidence.
     let summary_result =
-        fetch_quota_response(access_token, &project_id, RETRIEVE_USER_QUOTA_SUMMARY_URL);
-    let model_result = fetch_quota_response(access_token, &project_id, RETRIEVE_USER_QUOTA_URL);
-    let snapshots = match (summary_result, model_result) {
-        (Ok(summary), Ok(model)) => merge_quota_snapshots(
-            parse_quota_summary_snapshots(&summary),
-            parse_quota_snapshots(&model),
-        ),
-        (Ok(summary), Err(_)) => parse_quota_summary_snapshots(&summary),
-        (Err(_), Ok(model)) => parse_quota_snapshots(&model),
-        (Err(summary_error), Err(_)) => return Err(summary_error),
-    };
-    Ok(Some(snapshots))
+        fetch_quota_response(access_token, &project_id, RETRIEVE_USER_QUOTA_SUMMARY_RPC);
+    let model_result = fetch_quota_response(access_token, &project_id, RETRIEVE_USER_QUOTA_RPC);
+    combine_quota_responses(summary_result, model_result)
 }
 
 impl exports::health_probe::Guest for Component {
@@ -2171,17 +2250,91 @@ mod tests {
     }
 
     #[test]
-    fn quota_probe_uses_daily_grouped_summary_endpoint() {
+    fn quota_rpcs_use_daily_then_cloudcode_runtime_hosts() {
+        let expected_urls = |method: &str| {
+            [
+                format!("https://daily-cloudcode-pa.googleapis.com/v1internal:{method}"),
+                format!("https://cloudcode-pa.googleapis.com/v1internal:{method}"),
+            ]
+        };
         assert_eq!(
-            RETRIEVE_USER_QUOTA_SUMMARY_URL,
-            "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+            quota_rpc_urls(RETRIEVE_USER_QUOTA_SUMMARY_RPC),
+            expected_urls("retrieveUserQuotaSummary")
         );
         assert_eq!(
-            RETRIEVE_USER_QUOTA_URL,
-            "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota"
+            quota_rpc_urls(RETRIEVE_USER_QUOTA_RPC),
+            expected_urls("retrieveUserQuota")
+        );
+        assert_eq!(
+            LOAD_CODE_ASSIST_URL,
+            "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
+        );
+        assert_eq!(
+            ONBOARD_USER_URL,
+            "https://cloudcode-pa.googleapis.com/v1internal:onboardUser"
         );
         assert!(include_str!("../plugin.toml").contains("daily-cloudcode-pa.googleapis.com"));
         assert!(include_str!("../plugin.toml").contains("cloudcode-pa.googleapis.com"));
+    }
+
+    #[test]
+    fn quota_rpc_falls_back_after_primary_host_failure() {
+        let urls = quota_rpc_urls(RETRIEVE_USER_QUOTA_RPC);
+        let expected_response = serde_json::json!({ "buckets": [] });
+        let mut attempted_urls = Vec::new();
+        let response = first_available_quota_response(urls, |url| {
+            attempted_urls.push(url.to_string());
+            if url.starts_with("https://daily-cloudcode-pa.googleapis.com/") {
+                Err(kinetix_plugin_sdk::helpers::retryable_error(
+                    "upstream_unavailable",
+                    "daily host unavailable",
+                    Some(5),
+                ))
+            } else {
+                Ok(Some(expected_response.clone()))
+            }
+        });
+
+        let response = match response {
+            Ok(Some(response)) => response,
+            _ => panic!("expected quota response from fallback host"),
+        };
+        assert_eq!(response, expected_response);
+        assert_eq!(attempted_urls.len(), 2);
+        assert!(attempted_urls[0].starts_with("https://daily-cloudcode-pa.googleapis.com/"));
+        assert!(attempted_urls[1].starts_with("https://cloudcode-pa.googleapis.com/"));
+    }
+
+    #[test]
+    fn unsupported_quota_rpcs_are_unknown_and_auth_errors_take_priority() {
+        let mut attempted_hosts = 0;
+        let unsupported = first_available_quota_response::<serde_json::Value>(
+            quota_rpc_urls(RETRIEVE_USER_QUOTA_RPC),
+            |_| {
+                attempted_hosts += 1;
+                Ok(None)
+            },
+        );
+        assert!(matches!(unsupported, Ok(None)));
+        assert_eq!(attempted_hosts, 2);
+        assert!(matches!(
+            combine_quota_responses(Ok(None), Ok(None)),
+            Ok(None)
+        ));
+
+        let summary_error = kinetix_plugin_sdk::helpers::retryable_error(
+            "upstream_unavailable",
+            "summary endpoint unavailable",
+            Some(5),
+        );
+        let model_error = kinetix_plugin_sdk::helpers::error(
+            "credential_expired",
+            "model endpoint rejected credentials",
+        );
+        let Err(error) = combine_quota_responses(Err(summary_error), Err(model_error)) else {
+            panic!("expected quota probe error");
+        };
+        assert_eq!(error.code, "credential_expired");
     }
 
     #[test]
@@ -2228,6 +2381,34 @@ mod tests {
         assert_eq!(snapshots[1].window.as_deref(), Some("weekly"));
         assert_eq!(snapshots[2].group.as_deref(), Some("Claude + GPT models"));
         assert_eq!(account_quota_fields(&snapshots), (None, None));
+    }
+
+    #[test]
+    fn infers_normalized_windows_from_observed_bucket_labels() {
+        let snapshots = parse_quota_summary_snapshots(&serde_json::json!({
+            "groups": [{
+                "displayName": "Gemini Models",
+                "buckets": [
+                    {
+                        "bucketId": "gemini-weekly",
+                        "displayName": "Weekly Limit",
+                        "remainingFraction": 0.75
+                    },
+                    {
+                        "bucketId": "gemini-5h",
+                        "displayName": "5-Hour Session",
+                        "remainingFraction": 0.5
+                    }
+                ]
+            }]
+        }));
+
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].group.as_deref(), Some("Gemini Models"));
+        assert_eq!(snapshots[0].bucket_id.as_deref(), Some("gemini-weekly"));
+        assert_eq!(snapshots[0].window.as_deref(), Some("weekly"));
+        assert_eq!(snapshots[1].bucket_id.as_deref(), Some("gemini-5h"));
+        assert_eq!(snapshots[1].window.as_deref(), Some("5h"));
     }
 
     #[test]
