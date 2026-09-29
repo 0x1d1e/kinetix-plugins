@@ -4,8 +4,10 @@ Kinetix plugin for Google Antigravity / Cloud Code Assist. It provides:
 
 - the `antigravity-oauth` credential strategy;
 - the `antigravity` AuthFlow;
-- account-aware model discovery;
+- account-aware model discovery and structured quota health observations;
 - the `antigravity` (`v1internal`) provider adapter.
+
+Quota probes use Cloud Code Assist's internal `retrieveUserQuota` RPC. That endpoint is unstable; absent quota fields remain unknown, and buckets without a model id are not treated as account-wide. Probes do not onboard accounts when no project id is cached.
 
 ## Connect from Kinetix
 
@@ -20,7 +22,7 @@ provider.wire_plugin       = "plugin:dev.kinetix.antigravity-oauth/antigravity"
 
 The manifest requests:
 
-- outbound HTTP to `accounts.google.com`, `oauth2.googleapis.com`, `www.googleapis.com`, and `daily-cloudcode-pa.googleapis.com`;
+- outbound HTTP to `accounts.google.com`, `oauth2.googleapis.com`, `www.googleapis.com`, `cloudcode-pa.googleapis.com`, and `daily-cloudcode-pa.googleapis.com`;
 - credential scope `credential_strategy:antigravity-oauth`;
 - plaintext credential read for OAuth refresh-token exchange.
 

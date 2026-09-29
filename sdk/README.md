@@ -35,3 +35,9 @@ if kinetix_plugin_sdk::oauth::needs_refresh(expires_at_ms, now_ms, refresh_lead_
     // Refresh using the provider-specific endpoint, then persist the full state.
 }
 ```
+
+## Versioned health quota observations
+
+The optional `plugin-health-v2` world exposes `HealthObservationV2` and multiple `QuotaSnapshotV1` values without changing the legacy health-probe ABI. Plugins can export both worlds; hosts must opt into v2 to read snapshots, while older plugins continue using `plugin`.
+
+Quota is evidence, not a routing decision. Missing fields and an empty snapshot list mean unknown, never zero or full. Use account scope only when the provider establishes it; model scope requires the exact provider model ID. Preserve provider groups and bucket IDs without inferring scope. Report only provider-supplied amounts, units, windows, and RFC3339 reset times. Amounts are finite, non-negative, and may be fractional; `remaining_fraction` is in `[0, 1]`.

@@ -47,6 +47,8 @@ const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const USERINFO_URL: &str = "https://www.googleapis.com/oauth2/v1/userinfo";
 const LOAD_CODE_ASSIST_URL: &str = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
 const ONBOARD_USER_URL: &str = "https://cloudcode-pa.googleapis.com/v1internal:onboardUser";
+const RETRIEVE_USER_QUOTA_URL: &str =
+    "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota";
 const PROJECT_KEY_PREFIX: &str = "project:";
 const ANTIGRAVITY_SCOPES: &[&str] = &[
     "https://www.googleapis.com/auth/cloud-platform",
@@ -1574,9 +1576,253 @@ impl exports::model_source::Guest for Component {
         Err(unsupported())
     }
 }
+type HealthPluginError = health_world::kinetix::plugin::types::PluginError;
+type HealthObservationV2 = health_world::kinetix::plugin::types::HealthObservationV2;
+type HealthQuotaScopeV1 = health_world::kinetix::plugin::types::QuotaScopeV1;
+type HealthQuotaSnapshotV1 = health_world::kinetix::plugin::types::QuotaSnapshotV1;
+
+fn quota_amount(value: &serde_json::Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_str()?.trim().parse::<u64>().ok())
+}
+
+fn normalize_quota_unit(value: &str) -> Option<String> {
+    let normalized = value.trim().to_ascii_lowercase().replace([' ', '-'], "_");
+    if normalized.is_empty() {
+        return None;
+    }
+    Some(match normalized.as_str() {
+        "request" | "requests" => "requests".into(),
+        "token" | "tokens" => "tokens".into(),
+        "credit" | "credits" => "credits".into(),
+        _ => normalized,
+    })
+}
+
+fn parse_quota_snapshots(value: &serde_json::Value) -> Vec<HealthQuotaSnapshotV1> {
+    value
+        .get("buckets")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|bucket| {
+            let model_id = bucket
+                .get("modelId")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|model| !model.is_empty());
+            let remaining_fraction = bucket
+                .get("remainingFraction")
+                .and_then(serde_json::Value::as_f64)
+                .filter(|fraction| fraction.is_finite() && (0.0..=1.0).contains(fraction));
+            let remaining = bucket.get("remainingAmount").and_then(quota_amount);
+            let reset_at = bucket
+                .get("resetTime")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| parse_rfc3339_ms(value).is_some())
+                .map(str::to_string);
+
+            // Do not emit a bucket that contains no quota measurement or reset
+            // evidence. In particular, a missing fraction is not full quota.
+            if remaining_fraction.is_none() && remaining.is_none() && reset_at.is_none() {
+                return None;
+            }
+
+            let scope = match model_id {
+                Some(model_id) => HealthQuotaScopeV1::Model(model_id.to_string()),
+                None => HealthQuotaScopeV1::Unknown,
+            };
+            let unit = bucket
+                .get("tokenType")
+                .and_then(serde_json::Value::as_str)
+                .and_then(normalize_quota_unit);
+
+            Some(HealthQuotaSnapshotV1 {
+                scope,
+                remaining_fraction,
+                remaining,
+                limit: None,
+                unit,
+                // The provider response has no stable window label.
+                window: None,
+                reset_at,
+            })
+        })
+        .collect()
+}
+
+fn account_quota_fields(snapshots: &[HealthQuotaSnapshotV1]) -> (Option<String>, Option<String>) {
+    let mut account_snapshots = snapshots
+        .iter()
+        .filter(|snapshot| matches!(&snapshot.scope, HealthQuotaScopeV1::Account));
+    let Some(snapshot) = account_snapshots.next() else {
+        return (None, None);
+    };
+    if account_snapshots.next().is_some() {
+        // The legacy ABI cannot distinguish multiple account-wide windows.
+        return (None, None);
+    }
+
+    (
+        snapshot
+            .remaining_fraction
+            .map(|fraction| fraction.to_string()),
+        snapshot.reset_at.clone(),
+    )
+}
+
+fn quota_probe_error(error: PluginError) -> HealthPluginError {
+    HealthPluginError {
+        code: error.code,
+        message: error.message,
+        retryable: error.retryable,
+        retry_after: error.retry_after,
+        reset_at: error.reset_at,
+    }
+}
+
+fn fetch_quota_snapshots(
+    provider_id: &str,
+    account_id: &str,
+) -> Result<Option<Vec<HealthQuotaSnapshotV1>>, PluginError> {
+    let account = AccountRef {
+        provider_id: provider_id.into(),
+        account_id: account_id.into(),
+    };
+    let credential = load_credential(&account)?;
+    let now = kinetix_plugin_sdk::helpers::now_unix_millis();
+    let access_token = credential
+        .access_token
+        .as_deref()
+        .filter(|token| !token.is_empty())
+        .filter(|_| {
+            credential
+                .expiry
+                .as_deref()
+                .and_then(parse_rfc3339_ms)
+                .is_some_and(|expiry| expiry > now)
+        })
+        .ok_or_else(|| {
+            kinetix_plugin_sdk::helpers::error(
+                "credential_expired",
+                "Antigravity quota probe requires an unexpired access token",
+            )
+        })?;
+    let project_id = credential
+        .project_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|project| !project.is_empty())
+        .map(str::to_string)
+        .or_else(|| credential_storage_get(&project_state_key(provider_id, account_id)))
+        .filter(|project| !project.trim().is_empty());
+    let Some(project_id) = project_id else {
+        // A health probe must not onboard accounts. Until credential resolution
+        // has cached a project id, quota remains unknown.
+        return Ok(None);
+    };
+
+    let body = serde_json::to_vec(&serde_json::json!({ "project": project_id })).map_err(|e| {
+        kinetix_plugin_sdk::helpers::error(
+            "plugin_internal",
+            format!("encoding quota request: {e}"),
+        )
+    })?;
+    let request = HttpRequest {
+        method: "POST".into(),
+        url: RETRIEVE_USER_QUOTA_URL.into(),
+        headers: project_headers(access_token),
+        body,
+        credential: None,
+    };
+    let response = kinetix::plugin::host_http::send(&request).map_err(|error| {
+        kinetix_plugin_sdk::helpers::retryable_error(&error.code, error.message, error.retry_after)
+    })?;
+    if response.body_truncated {
+        return Err(kinetix_plugin_sdk::helpers::retryable_error(
+            "upstream_unavailable",
+            "quota response truncated",
+            Some(5),
+        ));
+    }
+    if !(200..300).contains(&response.status) {
+        let message = format!("quota endpoint returned HTTP {}", response.status);
+        return Err(match response.status {
+            401 => kinetix_plugin_sdk::helpers::error("credential_expired", message),
+            429 => kinetix_plugin_sdk::helpers::retryable_error(
+                "upstream_unavailable",
+                message,
+                Some(5),
+            ),
+            status if status >= 500 => kinetix_plugin_sdk::helpers::retryable_error(
+                "upstream_unavailable",
+                message,
+                Some(5),
+            ),
+            _ => kinetix_plugin_sdk::helpers::error("upstream_unavailable", message),
+        });
+    }
+    let text = String::from_utf8(response.body).map_err(|_| {
+        kinetix_plugin_sdk::helpers::error("protocol_error", "quota response is not UTF-8")
+    })?;
+    let value = serde_json::from_str(&text).map_err(|error| {
+        kinetix_plugin_sdk::helpers::error(
+            "protocol_error",
+            format!("invalid quota response JSON: {error}"),
+        )
+    })?;
+    Ok(Some(parse_quota_snapshots(&value)))
+}
+
 impl exports::health_probe::Guest for Component {
-    fn probe(_p: String, _a: String) -> Result<HealthObservation, PluginError> {
-        Err(unsupported())
+    fn probe(provider_id: String, account_id: String) -> Result<HealthObservation, PluginError> {
+        let Some(snapshots) = fetch_quota_snapshots(&provider_id, &account_id)? else {
+            return Ok(HealthObservation {
+                state: "unknown".into(),
+                quota_state: None,
+                reset_at: None,
+                retry_after: None,
+                detail_code: None,
+            });
+        };
+        let (quota_state, reset_at) = account_quota_fields(&snapshots);
+        Ok(HealthObservation {
+            state: "healthy".into(),
+            quota_state,
+            reset_at,
+            retry_after: None,
+            detail_code: None,
+        })
+    }
+}
+
+impl health_world::exports::health_probe_v2::Guest for Component {
+    fn probe(
+        provider_id: String,
+        account_id: String,
+    ) -> Result<HealthObservationV2, HealthPluginError> {
+        let Some(quota_snapshots) =
+            fetch_quota_snapshots(&provider_id, &account_id).map_err(quota_probe_error)?
+        else {
+            return Ok(HealthObservationV2 {
+                state: "unknown".into(),
+                quota_state: None,
+                reset_at: None,
+                retry_after: None,
+                detail_code: None,
+                quota_snapshots: Vec::new(),
+            });
+        };
+        let (quota_state, reset_at) = account_quota_fields(&quota_snapshots);
+        Ok(HealthObservationV2 {
+            state: "healthy".into(),
+            quota_state,
+            reset_at,
+            retry_after: None,
+            detail_code: None,
+            quota_snapshots,
+        })
     }
 }
 impl exports::routing_facts::Guest for Component {
@@ -1698,6 +1944,10 @@ impl ProviderAdapterGuest for Component {
 
 adapter_world::export!(Component with_types_in kinetix_plugin_sdk::adapter_v2);
 
+use kinetix_plugin_sdk::health as health_world;
+
+health_world::export!(Component with_types_in kinetix_plugin_sdk::health);
+
 export!(Component with_types_in kinetix_plugin_sdk);
 
 #[cfg(test)]
@@ -1710,6 +1960,115 @@ mod tests {
         assert!(manifest
             .lines()
             .any(|line| line.trim() == "thinking_translation = true"));
+    }
+
+    #[test]
+    fn quota_response_preserves_scopes_and_unknown_values() {
+        let snapshots = parse_quota_snapshots(&serde_json::json!({
+            "buckets": [
+                {
+                    "modelId": "gemini-2.5-pro",
+                    "tokenType": "REQUESTS",
+                    "remainingFraction": 0.75,
+                    "remainingAmount": "750",
+                    "resetTime": "2026-04-01T00:00:00Z"
+                },
+                {
+                    "modelId": "gemini-2.5-pro",
+                    "tokenType": "TOKENS",
+                    "remainingAmount": "44"
+                },
+                {
+                    "tokenType": "REQUESTS",
+                    "remainingFraction": 0.0
+                },
+                { "tokenType": "TOKENS" },
+                {
+                    "modelId": "ignored",
+                    "remainingFraction": 1.5,
+                    "resetTime": "not-a-time"
+                }
+            ]
+        }));
+
+        assert_eq!(snapshots.len(), 3);
+        assert!(matches!(
+            &snapshots[0].scope,
+            HealthQuotaScopeV1::Model(model) if model == "gemini-2.5-pro"
+        ));
+        assert_eq!(snapshots[0].remaining_fraction, Some(0.75));
+        assert_eq!(snapshots[0].remaining, Some(750));
+        assert_eq!(snapshots[0].unit.as_deref(), Some("requests"));
+        assert_eq!(snapshots[0].window, None);
+        assert_eq!(
+            snapshots[0].reset_at.as_deref(),
+            Some("2026-04-01T00:00:00Z")
+        );
+        assert_eq!(snapshots[1].remaining_fraction, None);
+        assert_eq!(snapshots[1].remaining, Some(44));
+        assert_eq!(snapshots[1].unit.as_deref(), Some("tokens"));
+        assert!(matches!(&snapshots[2].scope, HealthQuotaScopeV1::Unknown));
+        assert_eq!(snapshots[2].remaining_fraction, Some(0.0));
+        assert_eq!(snapshots[2].unit.as_deref(), Some("requests"));
+        assert_eq!(account_quota_fields(&snapshots), (None, None));
+    }
+
+    #[test]
+    fn model_quota_is_not_projected_as_account_quota() {
+        let snapshots = parse_quota_snapshots(&serde_json::json!({
+            "buckets": [{
+                "modelId": "gemini-2.5-pro",
+                "remainingFraction": 0.2,
+                "resetTime": "2026-04-01T00:00:00Z"
+            }]
+        }));
+
+        assert_eq!(account_quota_fields(&snapshots), (None, None));
+        assert!(parse_quota_snapshots(&serde_json::json!({})).is_empty());
+    }
+
+    #[test]
+    fn account_quota_projection_preserves_single_snapshot() {
+        let snapshots = vec![HealthQuotaSnapshotV1 {
+            scope: HealthQuotaScopeV1::Account,
+            remaining_fraction: Some(0.25),
+            remaining: None,
+            limit: None,
+            unit: Some("requests".into()),
+            window: Some("5h".into()),
+            reset_at: Some("2026-04-01T00:00:00Z".into()),
+        }];
+
+        assert_eq!(
+            account_quota_fields(&snapshots),
+            (Some("0.25".into()), Some("2026-04-01T00:00:00Z".into()))
+        );
+    }
+
+    #[test]
+    fn legacy_projection_does_not_collapse_multiple_account_windows() {
+        let snapshots = vec![
+            HealthQuotaSnapshotV1 {
+                scope: HealthQuotaScopeV1::Account,
+                remaining_fraction: Some(0.8),
+                remaining: None,
+                limit: None,
+                unit: Some("requests".into()),
+                window: Some("5h".into()),
+                reset_at: None,
+            },
+            HealthQuotaSnapshotV1 {
+                scope: HealthQuotaScopeV1::Account,
+                remaining_fraction: Some(0.25),
+                remaining: None,
+                limit: None,
+                unit: Some("requests".into()),
+                window: Some("weekly".into()),
+                reset_at: Some("2026-04-01T00:00:00Z".into()),
+            },
+        ];
+
+        assert_eq!(account_quota_fields(&snapshots), (None, None));
     }
 
     #[test]
