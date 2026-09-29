@@ -105,11 +105,13 @@ fn send_request(request: &ModelHttpRequest) -> Result<ModelHttpResponse, ModelPl
 }
 
 #[cfg(test)]
+type CapturedRequest = (String, Vec<(String, String)>);
+
+#[cfg(test)]
 thread_local! {
     static TEST_API_KEY: RefCell<String> = RefCell::new("test-key".into());
     static TEST_RESPONSE: RefCell<Option<ModelHttpResponse>> = const { RefCell::new(None) };
-    static TEST_REQUEST: RefCell<Option<(String, Vec<(String, String)>)>> =
-        const { RefCell::new(None) };
+    static TEST_REQUEST: RefCell<Option<CapturedRequest>> = const { RefCell::new(None) };
 }
 
 #[cfg(test)]
@@ -158,15 +160,21 @@ fn join_url(base_url: &str, models_path: &str) -> String {
 }
 
 fn normalized_capabilities(item: &Value) -> Result<String, ModelPluginError> {
-    let mut capabilities = ModelCapabilitiesV1::default();
-    capabilities.transport = Some(TransportCapability::new("gemini"));
-    if let Some(thinking) = item.get("thinking").and_then(Value::as_bool) {
-        capabilities.reasoning = Some(if thinking {
-            ReasoningCapability::supported_unknown()
-        } else {
-            ReasoningCapability::unsupported()
+    let reasoning = item
+        .get("thinking")
+        .and_then(Value::as_bool)
+        .map(|thinking| {
+            if thinking {
+                ReasoningCapability::supported_unknown()
+            } else {
+                ReasoningCapability::unsupported()
+            }
         });
-    }
+    let capabilities = ModelCapabilitiesV1 {
+        transport: Some(TransportCapability::new("gemini")),
+        reasoning,
+        ..Default::default()
+    };
     capabilities.to_json().map_err(|error| {
         model_error(
             "plugin_internal",

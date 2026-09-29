@@ -5,23 +5,25 @@ use kinetix_plugin_sdk::model_capabilities::{
 
 #[test]
 fn round_trips_full_v1_metadata() {
-    let mut capabilities = ModelCapabilitiesV1::default();
-    capabilities.transport = Some(TransportCapability::new("openai-responses"));
-    capabilities.reasoning = Some(ReasoningCapability::level(
-        vec![
-            ReasoningLevel::Minimal,
-            ReasoningLevel::Low,
-            ReasoningLevel::Medium,
-            ReasoningLevel::High,
-            ReasoningLevel::XHigh,
-            ReasoningLevel::Max,
-        ],
-        Some(ReasoningLevel::Medium),
-        true,
-    ));
-    capabilities.tools = Some(SupportCapability::new(true));
-    capabilities.vision = Some(VisionCapability::new(true));
-    capabilities.structured_output = Some(SupportCapability::new(false));
+    let capabilities = ModelCapabilitiesV1 {
+        transport: Some(TransportCapability::new("openai-responses")),
+        reasoning: Some(ReasoningCapability::level(
+            vec![
+                ReasoningLevel::Minimal,
+                ReasoningLevel::Low,
+                ReasoningLevel::Medium,
+                ReasoningLevel::High,
+                ReasoningLevel::XHigh,
+                ReasoningLevel::Max,
+            ],
+            Some(ReasoningLevel::Medium),
+            true,
+        )),
+        tools: Some(SupportCapability::new(true)),
+        vision: Some(VisionCapability::new(true)),
+        structured_output: Some(SupportCapability::new(false)),
+        ..Default::default()
+    };
 
     let encoded = capabilities.to_json().unwrap();
     let decoded = ModelCapabilitiesV1::from_json(&encoded).unwrap();
@@ -31,8 +33,10 @@ fn round_trips_full_v1_metadata() {
 
 #[test]
 fn supported_reasoning_without_mode_stays_unknown() {
-    let mut capabilities = ModelCapabilitiesV1::default();
-    capabilities.reasoning = Some(ReasoningCapability::supported_unknown());
+    let capabilities = ModelCapabilitiesV1 {
+        reasoning: Some(ReasoningCapability::supported_unknown()),
+        ..Default::default()
+    };
 
     let encoded = capabilities.to_json().unwrap();
     let value: serde_json::Value = serde_json::from_str(&encoded).unwrap();
@@ -44,8 +48,10 @@ fn supported_reasoning_without_mode_stays_unknown() {
 
 #[test]
 fn toggle_reasoning_is_distinct_from_level_reasoning() {
-    let mut capabilities = ModelCapabilitiesV1::default();
-    capabilities.reasoning = Some(ReasoningCapability::toggle(true));
+    let capabilities = ModelCapabilitiesV1 {
+        reasoning: Some(ReasoningCapability::toggle(true)),
+        ..Default::default()
+    };
 
     let encoded = capabilities.to_json().unwrap();
     let value: serde_json::Value = serde_json::from_str(&encoded).unwrap();
