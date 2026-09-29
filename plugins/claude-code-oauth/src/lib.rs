@@ -63,14 +63,15 @@ fn credential_from_host(provider_id: &str, account_id: &str) -> Result<Credentia
 
 fn load_credential(provider_id: &str, account_id: &str) -> Result<Credential, PluginError> {
     let key = credential_state_key(provider_id, account_id);
-    let saved =
-        kinetix_plugin_sdk::oauth::load_persisted_credential::<Credential>(&key).map_err(|e| {
-            kinetix_plugin_sdk::helpers::error(
-                "invalid_configuration",
-                format!("invalid persisted Claude Code OAuth state: {e}"),
-            )
-        })?;
-    if let Some(saved) = saved {
+    let persisted = kinetix_plugin_sdk::oauth::load_persisted_credential::<Credential>(&key);
+    load_credential_from_state(persisted, || credential_from_host(provider_id, account_id))
+}
+
+fn load_credential_from_state(
+    persisted: Result<Option<Credential>, String>,
+    fallback: impl FnOnce() -> Result<Credential, PluginError>,
+) -> Result<Credential, PluginError> {
+    if let Ok(Some(saved)) = persisted {
         if saved
             .refresh_token
             .as_deref()
@@ -80,7 +81,7 @@ fn load_credential(provider_id: &str, account_id: &str) -> Result<Credential, Pl
             return Ok(saved);
         }
     }
-    credential_from_host(provider_id, account_id)
+    fallback()
 }
 
 fn persist_credential(
@@ -156,6 +157,12 @@ fn oauth_refresh_plugin_error(error: kinetix_plugin_sdk::oauth::OAuthRefreshErro
     }
 }
 
+fn oauth_refresh_http_error(status: u16, body: &[u8]) -> PluginError {
+    oauth_refresh_plugin_error(
+        kinetix_plugin_sdk::oauth::classify_refresh_http_error_bytes(status, body),
+    )
+}
+
 fn refresh(cred: &Credential) -> Result<Credential, PluginError> {
     let refresh_token = cred
         .refresh_token
@@ -202,18 +209,15 @@ fn refresh(cred: &Credential) -> Result<Credential, PluginError> {
         ));
     }
 
+    if resp.status != 200 {
+        return Err(oauth_refresh_http_error(resp.status, &resp.body));
+    }
     let text = String::from_utf8(resp.body).map_err(|_| {
         kinetix_plugin_sdk::helpers::error(
             "protocol_error",
             "Claude OAuth token response is not UTF-8",
         )
     })?;
-
-    if resp.status != 200 {
-        return Err(oauth_refresh_plugin_error(
-            kinetix_plugin_sdk::oauth::classify_refresh_http_error(resp.status, &text),
-        ));
-    }
 
     parse_token_response(&text, Some(refresh_token))
         .map_err(|e| kinetix_plugin_sdk::helpers::error("protocol_error", e))
@@ -517,6 +521,32 @@ mod tests {
             expires_at_ms,
             scope: None,
             token_type: None,
+        }
+    }
+
+    #[test]
+    fn malformed_persisted_state_falls_back_to_imported_credential() {
+        let persisted =
+            kinetix_plugin_sdk::oauth::deserialize_credential_state::<Credential>("{").map(Some);
+        let imported = Credential {
+            access_token: Some("imported-access".into()),
+            refresh_token: Some("imported-refresh".into()),
+            ..Default::default()
+        };
+
+        let loaded = load_credential_from_state(persisted, || Ok(imported.clone())).unwrap();
+
+        assert_eq!(loaded.access_token.as_deref(), Some("imported-access"));
+        assert_eq!(loaded.refresh_token.as_deref(), Some("imported-refresh"));
+    }
+
+    #[test]
+    fn non_utf8_429_and_503_refresh_bodies_remain_retryable() {
+        for status in [429, 503] {
+            let error = oauth_refresh_http_error(status, &[0xff, 0xfe]);
+            assert_eq!(error.code, "upstream_unavailable", "HTTP {status}");
+            assert!(error.retryable, "HTTP {status}");
+            assert_eq!(error.retry_after, Some(5), "HTTP {status}");
         }
     }
 

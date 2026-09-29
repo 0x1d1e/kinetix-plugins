@@ -237,6 +237,15 @@ impl OAuthRefreshError {
     }
 }
 
+/// Classify a raw HTTP failure body from a token endpoint.
+///
+/// Invalid UTF-8 is lossily decoded for optional OAuth error details; status
+/// classification still applies.
+pub fn classify_refresh_http_error_bytes(status: u16, body: &[u8]) -> OAuthRefreshError {
+    let body = String::from_utf8_lossy(body);
+    classify_refresh_http_error(status, &body)
+}
+
 /// Classify an HTTP failure from a token endpoint.
 ///
 /// `invalid_grant` is terminal credential revocation. Rate limits and server
@@ -447,5 +456,11 @@ mod tests {
             classify_refresh_http_error(400, r#"{"error":"temporarily_unavailable"}"#);
         assert_eq!(provider_transient.code, "upstream_unavailable");
         assert!(provider_transient.retryable);
+
+        for status in [429, 503] {
+            let invalid_utf8 = classify_refresh_http_error_bytes(status, &[0xff, 0xfe]);
+            assert_eq!(invalid_utf8.code, "upstream_unavailable");
+            assert!(invalid_utf8.retryable);
+        }
     }
 }

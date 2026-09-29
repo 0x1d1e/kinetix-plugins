@@ -149,10 +149,10 @@ fn token_refresh_transport_error(code: &str, message: &str) -> RefreshError {
     ))
 }
 
-fn token_refresh_http_error(status: u16, body: &str) -> RefreshError {
-    from_shared_refresh_error(kinetix_plugin_sdk::oauth::classify_refresh_http_error(
-        status, body,
-    ))
+fn token_refresh_http_error(status: u16, body: &[u8]) -> RefreshError {
+    from_shared_refresh_error(
+        kinetix_plugin_sdk::oauth::classify_refresh_http_error_bytes(status, body),
+    )
 }
 
 fn provider_expiry_ms(
@@ -427,11 +427,11 @@ fn refresh(cred: &mut Credential) -> Result<(), RefreshError> {
             kinetix_plugin_sdk::oauth::retryable_refresh_error("token response truncated"),
         ));
     }
+    if resp.status != 200 {
+        return Err(token_refresh_http_error(resp.status, &resp.body));
+    }
     let text = String::from_utf8(resp.body)
         .map_err(|_| RefreshError::terminal("protocol_error", "token response not utf-8"))?;
-    if resp.status != 200 {
-        return Err(token_refresh_http_error(resp.status, &text));
-    }
     let now_ms = kinetix_plugin_sdk::helpers::now_unix_millis();
     let tokens = kinetix_plugin_sdk::oauth::parse_token_response(
         &text,
@@ -1103,14 +1103,14 @@ fn refresh_for_model_source(cred: &mut Credential) -> Result<(), ModelPluginErro
             kinetix_plugin_sdk::oauth::retryable_refresh_error("token response truncated"),
         )));
     }
-    let text = String::from_utf8(resp.body)
-        .map_err(|_| model_error("protocol_error", "token response not utf-8", false))?;
     if resp.status != 200 {
         return Err(model_refresh_error(token_refresh_http_error(
             resp.status,
-            &text,
+            &resp.body,
         )));
     }
+    let text = String::from_utf8(resp.body)
+        .map_err(|_| model_error("protocol_error", "token response not utf-8", false))?;
 
     let now_ms = model_world::kinetix::plugin::host_clock::now_unix_millis();
     let tokens = kinetix_plugin_sdk::oauth::parse_token_response(
@@ -1785,7 +1785,7 @@ mod tests {
     fn invalid_grant_refresh_failure_is_terminal_credential_expired() {
         let error = token_refresh_http_error(
             400,
-            r#"{
+            br#"{
                 "error":"invalid_grant",
                 "error_description":"Token has been expired or revoked."
             }"#,
@@ -1802,7 +1802,7 @@ mod tests {
     fn token_endpoint_server_and_transport_failures_remain_retryable() {
         let server_error = token_refresh_http_error(
             503,
-            r#"{
+            br#"{
                 "error":"temporarily_unavailable",
                 "error_description":"try again later"
             }"#,
@@ -1818,6 +1818,16 @@ mod tests {
         assert_eq!(transport_error.code, "upstream_unavailable");
         assert!(transport_error.retryable);
         assert_eq!(transport_error.retry_after, Some(5));
+    }
+
+    #[test]
+    fn token_endpoint_non_utf8_429_and_503_failures_remain_retryable() {
+        for status in [429, 503] {
+            let error = token_refresh_http_error(status, &[0xff, 0xfe]).into_plugin_error();
+            assert_eq!(error.code, "upstream_unavailable", "HTTP {status}");
+            assert!(error.retryable, "HTTP {status}");
+            assert_eq!(error.retry_after, Some(5), "HTTP {status}");
+        }
     }
 
     fn model_refresh_credential() -> Credential {
@@ -1880,6 +1890,25 @@ mod tests {
             assert_eq!(error.code, "upstream_unavailable");
             assert!(error.retryable);
             assert_eq!(error.retry_after, Some(5));
+        }
+        reset_model_refresh_responses();
+    }
+
+    #[test]
+    fn model_source_refresh_non_utf8_http_failures_are_retryable() {
+        for status in [429, 503] {
+            reset_model_refresh_responses();
+            enqueue_model_refresh_response(Ok(ModelRefreshHttpResponse {
+                status,
+                body: vec![0xff, 0xfe],
+                body_truncated: false,
+            }));
+
+            let error = refresh_for_model_source(&mut model_refresh_credential()).unwrap_err();
+
+            assert_eq!(error.code, "upstream_unavailable", "HTTP {status}");
+            assert!(error.retryable, "HTTP {status}");
+            assert_eq!(error.retry_after, Some(5), "HTTP {status}");
         }
         reset_model_refresh_responses();
     }
