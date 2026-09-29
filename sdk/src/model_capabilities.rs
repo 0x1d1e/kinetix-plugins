@@ -587,14 +587,16 @@ mod tests {
 
     #[test]
     fn pricing_round_trips_through_v1_envelope() {
-        let mut capabilities = ModelCapabilitiesV1::default();
-        capabilities.prices = Some(serde_json::json!({
-            "input_per_1m": 0.0,
-            "output_per_1m": 0.0,
-            "cached_per_1m": 0.0,
-            "cache_write_per_1m": 0.0,
-            "thinking_per_1m": 0.0
-        }));
+        let capabilities = ModelCapabilitiesV1 {
+            prices: Some(serde_json::json!({
+                "input_per_1m": 0.0,
+                "output_per_1m": 0.0,
+                "cached_per_1m": 0.0,
+                "cache_write_per_1m": 0.0,
+                "thinking_per_1m": 0.0
+            })),
+            ..Default::default()
+        };
 
         let encoded = capabilities.to_json().unwrap();
         let decoded = ModelCapabilitiesV1::from_json(&encoded).unwrap();
@@ -604,27 +606,29 @@ mod tests {
 
     #[test]
     fn v2_identity_variant_and_opaque_state_round_trip() {
-        let mut capabilities = ModelCapabilitiesV2::default();
-        capabilities.reasoning = Some(ReasoningCapability::level(
-            vec![ReasoningLevel::High],
-            Some(ReasoningLevel::High),
-            false,
-        ));
-        capabilities.identity = Some(ModelIdentityV2 {
-            canonical_model_id: "google/gemini-3.8-flash".into(),
-            variant: Some(ProviderVariantV1 {
-                kind: ProviderVariantKind::ReasoningTier,
-                id: "high".into(),
-                reasoning_level: Some(ReasoningLevel::High),
-                fixed: true,
+        let capabilities = ModelCapabilitiesV2 {
+            reasoning: Some(ReasoningCapability::level(
+                vec![ReasoningLevel::High],
+                Some(ReasoningLevel::High),
+                false,
+            )),
+            identity: Some(ModelIdentityV2 {
+                canonical_model_id: "google/gemini-3.8-flash".into(),
+                variant: Some(ProviderVariantV1 {
+                    kind: ProviderVariantKind::ReasoningTier,
+                    id: "high".into(),
+                    reasoning_level: Some(ReasoningLevel::High),
+                    fixed: true,
+                }),
             }),
-        });
-        capabilities.opaque_state = Some(OpaqueStateCapabilityV1 {
-            kind: OpaqueStateCapabilityKind::GeminiThoughtSignature,
-            family: "gemini".into(),
-            encoding_version: 1,
-            placeholder_strategy: Some(OpaqueStatePlaceholderStrategy::Gemini3SkipValidator),
-        });
+            opaque_state: Some(OpaqueStateCapabilityV1 {
+                kind: OpaqueStateCapabilityKind::GeminiThoughtSignature,
+                family: "gemini".into(),
+                encoding_version: 1,
+                placeholder_strategy: Some(OpaqueStatePlaceholderStrategy::Gemini3SkipValidator),
+            }),
+            ..Default::default()
+        };
 
         let encoded = capabilities.to_json().unwrap();
         let decoded = ModelCapabilitiesV2::from_json(&encoded).unwrap();
@@ -674,10 +678,12 @@ mod tests {
 
     #[test]
     fn invalid_prices_are_rejected_by_sdk_producers() {
-        let mut capabilities = ModelCapabilitiesV1::default();
-        capabilities.prices = Some(serde_json::json!({
-            "input_per_1m": -1.0
-        }));
+        let capabilities = ModelCapabilitiesV1 {
+            prices: Some(serde_json::json!({
+                "input_per_1m": -1.0
+            })),
+            ..Default::default()
+        };
 
         assert!(capabilities.to_json().is_err());
     }

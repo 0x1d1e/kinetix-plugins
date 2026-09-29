@@ -116,15 +116,6 @@ impl RefreshError {
         }
     }
 
-    fn retryable(message: impl Into<String>) -> Self {
-        Self {
-            code: "upstream_unavailable",
-            message: message.into(),
-            retryable: true,
-            retry_after: Some(5),
-        }
-    }
-
     fn terminal(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             code,
@@ -143,46 +134,35 @@ impl RefreshError {
     }
 }
 
+fn from_shared_refresh_error(error: kinetix_plugin_sdk::oauth::OAuthRefreshError) -> RefreshError {
+    RefreshError {
+        code: error.code,
+        message: error.message,
+        retryable: error.retryable,
+        retry_after: error.retry_after_secs,
+    }
+}
+
 fn token_refresh_transport_error(code: &str, message: &str) -> RefreshError {
-    RefreshError::retryable(format!("{code}: {message}"))
+    from_shared_refresh_error(kinetix_plugin_sdk::oauth::classify_refresh_transport_error(
+        code, message, None,
+    ))
 }
 
 fn token_refresh_http_error(status: u16, body: &str) -> RefreshError {
-    let parsed = serde_json::from_str::<serde_json::Value>(body).ok();
-    let oauth_error = parsed
-        .as_ref()
-        .and_then(|value| value.get("error"))
-        .and_then(|value| value.as_str());
-    let description = parsed
-        .as_ref()
-        .and_then(|value| value.get("error_description"))
-        .and_then(|value| value.as_str())
-        .filter(|value| !value.is_empty());
+    from_shared_refresh_error(kinetix_plugin_sdk::oauth::classify_refresh_http_error(
+        status, body,
+    ))
+}
 
-    if oauth_error == Some("invalid_grant") {
-        return RefreshError::credential_expired(
-            description
-                .unwrap_or("Google rejected the refresh token as invalid or expired")
-                .to_string(),
-        );
-    }
-
-    let detail = oauth_error
-        .map(|error| {
-            description
-                .map(|description| format!("{error}: {description}"))
-                .unwrap_or_else(|| error.to_string())
-        })
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| format!("HTTP {status}"));
-
-    if status == 429 || status >= 500 {
-        RefreshError::retryable(format!("token endpoint returned {detail}"))
+fn provider_expiry_ms(
+    tokens: &kinetix_plugin_sdk::oauth::OAuthTokenResponse,
+    now_ms: u64,
+) -> Option<u64> {
+    if tokens.expires_in_secs.is_some() {
+        tokens.expires_at_ms
     } else {
-        RefreshError::terminal(
-            "protocol_error",
-            format!("token endpoint returned {detail}"),
-        )
+        kinetix_plugin_sdk::oauth::expires_at_ms(now_ms, Some(3_600))
     }
 }
 
@@ -191,7 +171,8 @@ fn latest_credential_from_sources(
     persisted_raw: Option<&str>,
 ) -> Result<Credential, String> {
     let raw = persisted_raw.unwrap_or(imported_raw);
-    serde_json::from_str(raw).map_err(|e| format!("invalid Antigravity credential JSON: {e}"))
+    kinetix_plugin_sdk::oauth::deserialize_credential_state(raw)
+        .map_err(|e| format!("invalid Antigravity credential JSON: {e}"))
 }
 
 #[cfg(not(test))]
@@ -408,8 +389,8 @@ fn access_token_valid(cred: &Credential, now_ms: u64) -> bool {
         // waiting for the host's forced rotation after an upstream 401.
         return false;
     };
-    match parse_rfc3339_ms(expiry) {
-        Some(exp_ms) => exp_ms > now_ms.saturating_add(REFRESH_LEAD_MS),
+    match kinetix_plugin_sdk::oauth::parse_rfc3339_ms(expiry) {
+        Some(exp_ms) => !kinetix_plugin_sdk::oauth::needs_refresh(exp_ms, now_ms, REFRESH_LEAD_MS),
         None => false,
     }
 }
@@ -442,29 +423,27 @@ fn refresh(cred: &mut Credential) -> Result<(), RefreshError> {
     let resp = kinetix::plugin::host_http::send(&req)
         .map_err(|e| token_refresh_transport_error(&e.code, &e.message))?;
     if resp.body_truncated {
-        return Err(RefreshError::retryable("token response truncated"));
+        return Err(from_shared_refresh_error(
+            kinetix_plugin_sdk::oauth::retryable_refresh_error("token response truncated"),
+        ));
     }
     let text = String::from_utf8(resp.body)
         .map_err(|_| RefreshError::terminal("protocol_error", "token response not utf-8"))?;
     if resp.status != 200 {
         return Err(token_refresh_http_error(resp.status, &text));
     }
-    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
-        RefreshError::terminal("protocol_error", format!("invalid token JSON: {e}"))
-    })?;
-    let access = v
-        .get("access_token")
-        .and_then(|t| t.as_str())
-        .ok_or_else(|| {
-            RefreshError::terminal("protocol_error", "token response missing access_token")
-        })?;
-    cred.access_token = Some(access.to_string());
-    if let Some(rt) = v.get("refresh_token").and_then(|t| t.as_str()) {
-        cred.refresh_token = Some(rt.to_string());
-    }
-    let expires_in = v.get("expires_in").and_then(|e| e.as_u64()).unwrap_or(3600);
-    let exp_ms = kinetix_plugin_sdk::helpers::now_unix_millis() + expires_in * 1000;
-    cred.expiry = Some(format_rfc3339_ms(exp_ms));
+    let now_ms = kinetix_plugin_sdk::helpers::now_unix_millis();
+    let tokens = kinetix_plugin_sdk::oauth::parse_token_response(
+        &text,
+        cred.refresh_token.as_deref(),
+        now_ms,
+    )
+    .map_err(|e| RefreshError::terminal("protocol_error", e))?;
+    let expiry =
+        provider_expiry_ms(&tokens, now_ms).and_then(kinetix_plugin_sdk::oauth::format_rfc3339_ms);
+    cred.access_token = Some(tokens.access_token);
+    cred.refresh_token = tokens.refresh_token;
+    cred.expiry = expiry;
     Ok(())
 }
 
@@ -647,59 +626,6 @@ fn resolve_project_id(access_token: &str) -> Result<String, String> {
         .ok_or_else(|| "Google did not provision a cloudaicompanionProject".to_string())
 }
 
-// --- Minimal RFC3339 helpers (no chrono in a no_std-ish guest) --------------
-
-/// Parse an RFC3339 instant (`YYYY-MM-DDTHH:MM:SS[.fff][Z|±hh:mm]`) to Unix ms.
-fn parse_rfc3339_ms(s: &str) -> Option<u64> {
-    let b = s.as_bytes();
-    if b.len() < 19 {
-        return None;
-    }
-    let year: i64 = s.get(0..4)?.parse().ok()?;
-    let month: i64 = s.get(5..7)?.parse().ok()?;
-    let day: i64 = s.get(8..10)?.parse().ok()?;
-    let hour: i64 = s.get(11..13)?.parse().ok()?;
-    let min: i64 = s.get(14..16)?.parse().ok()?;
-    let sec: i64 = s.get(17..19)?.parse().ok()?;
-    let days = days_from_civil(year, month, day);
-    let secs = days * 86400 + hour * 3600 + min * 60 + sec;
-    Some(secs.max(0) as u64 * 1000)
-}
-
-/// Format Unix ms as RFC3339 UTC (`...Z`).
-fn format_rfc3339_ms(ms: u64) -> String {
-    let secs = (ms / 1000) as i64;
-    let days = secs.div_euclid(86400);
-    let rem = secs.rem_euclid(86400);
-    let (y, m, d) = civil_from_days(days);
-    let (hh, mm, ss) = (rem / 3600, (rem % 3600) / 60, rem % 60);
-    format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}Z")
-}
-
-/// Days since 1970-01-01 for a civil date (Howard Hinnant's algorithm).
-fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let mp = (m + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146097 + doe - 719468
-}
-
-fn civil_from_days(z: i64) -> (i64, i64, i64) {
-    let z = z + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = z - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (if m <= 2 { y + 1 } else { y }, m, d)
-}
-
 fn urlencode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
@@ -718,8 +644,7 @@ fn urlencode(s: &str) -> String {
 /// refresh token; continuing would make the next resolution fall back to stale
 /// imported state.
 fn persist_rotated(account: &AccountRef, cred: &Credential) -> Result<(), String> {
-    let serialized =
-        serde_json::to_string(cred).map_err(|e| format!("encoding credential state: {e}"))?;
+    let serialized = kinetix_plugin_sdk::oauth::serialize_credential_state(cred)?;
     credential_storage_put(&state_key(account), &serialized)
 }
 
@@ -960,38 +885,19 @@ impl auth_world::exports::auth_flow::Guest for Component {
             ));
         }
 
-        let tokens: serde_json::Value = serde_json::from_str(&text)
-            .map_err(|e| auth_error("protocol_error", format!("invalid token JSON: {e}"), false))?;
-        let access_token = tokens
-            .get("access_token")
-            .and_then(|value| value.as_str())
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                auth_error(
-                    "protocol_error",
-                    "token response missing access_token",
-                    false,
-                )
-            })?
-            .to_string();
-        let refresh_token = tokens
-            .get("refresh_token")
-            .and_then(|value| value.as_str())
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                auth_error(
-                    "credential_expired",
-                    "Google did not return a refresh_token; retry login and grant consent",
-                    false,
-                )
-            })?
-            .to_string();
-        let expires_in = tokens
-            .get("expires_in")
-            .and_then(|value| value.as_u64())
-            .unwrap_or(3600);
-        let expiry =
-            format_rfc3339_ms(kinetix_plugin_sdk::helpers::now_unix_millis() + expires_in * 1000);
+        let now_ms = kinetix_plugin_sdk::helpers::now_unix_millis();
+        let tokens = kinetix_plugin_sdk::oauth::parse_token_response(&text, None, now_ms)
+            .map_err(|e| auth_error("protocol_error", e, false))?;
+        let access_token = tokens.access_token.clone();
+        let refresh_token = tokens.refresh_token.clone().ok_or_else(|| {
+            auth_error(
+                "credential_expired",
+                "Google did not return a refresh_token; retry login and grant consent",
+                false,
+            )
+        })?;
+        let expiry = provider_expiry_ms(&tokens, now_ms)
+            .and_then(kinetix_plugin_sdk::oauth::format_rfc3339_ms);
 
         let mut email: Option<String> = None;
         let mut metadata: Option<String> = None;
@@ -1023,8 +929,8 @@ impl auth_world::exports::auth_flow::Guest for Component {
 
         let secret = Credential {
             refresh_token: Some(refresh_token),
-            access_token: Some(access_token),
-            expiry: Some(expiry),
+            access_token: Some(tokens.access_token),
+            expiry,
             project_id: Some(project_id),
             email: email.clone(),
         };
@@ -1079,7 +985,7 @@ fn send_model_refresh_request(
 thread_local! {
     static TEST_MODEL_REFRESH_RESPONSES:
         RefCell<VecDeque<Result<ModelRefreshHttpResponse, RefreshError>>> =
-        RefCell::new(VecDeque::new());
+        const { RefCell::new(VecDeque::new()) };
 }
 
 #[cfg(test)]
@@ -1153,13 +1059,8 @@ fn persist_model_credential(
     account: &ModelAccountRef,
     cred: &Credential,
 ) -> Result<(), ModelPluginError> {
-    let serialized = serde_json::to_string(cred).map_err(|e| {
-        model_error(
-            "plugin_internal",
-            format!("encoding credential state: {e}"),
-            false,
-        )
-    })?;
+    let serialized = kinetix_plugin_sdk::oauth::serialize_credential_state(cred)
+        .map_err(|e| model_error("plugin_internal", e, false))?;
     let key = credential_state_key(&account.provider_id, &account.account_id);
     model_world::kinetix::plugin::host_storage::put(&key, serialized.as_bytes()).map_err(|e| {
         model_error(
@@ -1198,8 +1099,8 @@ fn refresh_for_model_source(cred: &mut Credential) -> Result<(), ModelPluginErro
     };
     let resp = send_model_refresh_request(&req).map_err(model_refresh_error)?;
     if resp.body_truncated {
-        return Err(model_refresh_error(RefreshError::retryable(
-            "token response truncated",
+        return Err(model_refresh_error(from_shared_refresh_error(
+            kinetix_plugin_sdk::oauth::retryable_refresh_error("token response truncated"),
         )));
     }
     let text = String::from_utf8(resp.body)
@@ -1211,34 +1112,18 @@ fn refresh_for_model_source(cred: &mut Credential) -> Result<(), ModelPluginErro
         )));
     }
 
-    let value: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| model_error("protocol_error", format!("invalid token JSON: {e}"), false))?;
-    let access_token = value
-        .get("access_token")
-        .and_then(|item| item.as_str())
-        .filter(|item| !item.is_empty())
-        .ok_or_else(|| {
-            model_error(
-                "protocol_error",
-                "token response missing access_token",
-                false,
-            )
-        })?;
-    cred.access_token = Some(access_token.to_string());
-    if let Some(refresh_token) = value
-        .get("refresh_token")
-        .and_then(|item| item.as_str())
-        .filter(|item| !item.is_empty())
-    {
-        cred.refresh_token = Some(refresh_token.to_string());
-    }
-    let expires_in = value
-        .get("expires_in")
-        .and_then(|item| item.as_u64())
-        .unwrap_or(3600);
-    cred.expiry = Some(format_rfc3339_ms(
-        model_world::kinetix::plugin::host_clock::now_unix_millis() + expires_in * 1000,
-    ));
+    let now_ms = model_world::kinetix::plugin::host_clock::now_unix_millis();
+    let tokens = kinetix_plugin_sdk::oauth::parse_token_response(
+        &text,
+        cred.refresh_token.as_deref(),
+        now_ms,
+    )
+    .map_err(|e| model_error("protocol_error", e, false))?;
+    let expiry =
+        provider_expiry_ms(&tokens, now_ms).and_then(kinetix_plugin_sdk::oauth::format_rfc3339_ms);
+    cred.access_token = Some(tokens.access_token);
+    cred.refresh_token = tokens.refresh_token;
+    cred.expiry = expiry;
     Ok(())
 }
 
@@ -1490,15 +1375,17 @@ fn normalized_model_capabilities(
     info: &serde_json::Value,
 ) -> Result<Option<String>, ModelPluginError> {
     let profile = antigravity_model_profile(id);
-    let mut capabilities = ModelCapabilitiesV2::default();
-    capabilities.identity = profile
-        .canonical_model_id
-        .map(|canonical_model_id| ModelIdentityV2 {
-            canonical_model_id,
-            variant: profile.variant,
-        });
-    capabilities.reasoning = profile.reasoning;
-    capabilities.opaque_state = profile.opaque_state;
+    let mut capabilities = ModelCapabilitiesV2 {
+        identity: profile
+            .canonical_model_id
+            .map(|canonical_model_id| ModelIdentityV2 {
+                canonical_model_id,
+                variant: profile.variant,
+            }),
+        reasoning: profile.reasoning,
+        opaque_state: profile.opaque_state,
+        ..Default::default()
+    };
 
     if let Some(raw) = info.get("capabilities") {
         if capabilities.reasoning.is_none() {
@@ -1826,7 +1713,10 @@ mod tests {
         let now = 1_800_000_000_000;
         let cred = Credential {
             access_token: Some("access".into()),
-            expiry: Some(format_rfc3339_ms(now + REFRESH_LEAD_MS + 60_000)),
+            expiry: Some(
+                kinetix_plugin_sdk::oauth::format_rfc3339_ms(now + REFRESH_LEAD_MS + 60_000)
+                    .unwrap(),
+            ),
             ..Default::default()
         };
         assert!(access_token_valid(&cred, now));
@@ -1837,7 +1727,10 @@ mod tests {
         let now = 1_800_000_000_000;
         let cred = Credential {
             access_token: Some("access".into()),
-            expiry: Some(format_rfc3339_ms(now + REFRESH_LEAD_MS - 1_000)),
+            expiry: Some(
+                kinetix_plugin_sdk::oauth::format_rfc3339_ms(now + REFRESH_LEAD_MS - 1_000)
+                    .unwrap(),
+            ),
             ..Default::default()
         };
         assert!(!access_token_valid(&cred, now));
@@ -1848,7 +1741,7 @@ mod tests {
         let now = 1_800_000_000_000;
         let cred = Credential {
             access_token: Some("access".into()),
-            expiry: Some(format_rfc3339_ms(now - 60_000)),
+            expiry: Some(kinetix_plugin_sdk::oauth::format_rfc3339_ms(now - 60_000).unwrap()),
             ..Default::default()
         };
         assert!(!access_token_valid(&cred, now));
@@ -1863,6 +1756,29 @@ mod tests {
             ..Default::default()
         };
         assert!(should_refresh_before_lease(&cred, 1_800_000_000_000));
+    }
+
+    #[test]
+    fn google_default_expiry_is_safe_and_only_used_when_ttl_is_missing() {
+        let now_ms = 1_800_000_000_000;
+        let missing_ttl = kinetix_plugin_sdk::oauth::parse_token_response(
+            r#"{"access_token":"access"}"#,
+            None,
+            now_ms,
+        )
+        .unwrap();
+        assert_eq!(
+            provider_expiry_ms(&missing_ttl, now_ms),
+            Some(now_ms + 3_600_000)
+        );
+
+        let overflowing_ttl = kinetix_plugin_sdk::oauth::parse_token_response(
+            r#"{"access_token":"access","expires_in":18446744073709551615}"#,
+            None,
+            now_ms,
+        )
+        .unwrap();
+        assert_eq!(provider_expiry_ms(&overflowing_ttl, now_ms), None);
     }
 
     #[test]

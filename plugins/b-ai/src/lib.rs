@@ -154,8 +154,10 @@ fn catalog_reasoning(value: &CatalogReasoning) -> Result<ReasoningCapability, St
 }
 
 fn normalized_capabilities(entry: Option<&CatalogEntry>) -> Result<String, String> {
-    let mut capabilities = ModelCapabilitiesV1::default();
-    capabilities.transport = Some(TransportCapability::new("openai"));
+    let mut capabilities = ModelCapabilitiesV1 {
+        transport: Some(TransportCapability::new("openai")),
+        ..Default::default()
+    };
     if let Some(entry) = entry {
         capabilities.reasoning = entry
             .reasoning

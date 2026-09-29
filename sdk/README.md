@@ -20,3 +20,14 @@ The ABI is the WIT interface, not this crate.
 Model-source plugins should encode `DiscoveredModel.capabilities_json` with the SDK's strict `ModelCapabilitiesV1` types instead of provider-specific JSON. See [Model capability metadata v1](../docs/model-capabilities-v1.md).
 
 `ModelCapabilitiesV1::to_json()` and `from_json()` validate the schema version and reasoning invariants. The WIT field remains an optional string, so plugin API v1 is unchanged.
+
+## OAuth lifecycle
+
+`kinetix_plugin_sdk::oauth` provides provider-neutral helpers for checked expiry arithmetic, RFC3339 expiry parsing, token-response validation and rotation, persisted credential state, and refresh-error classification. Providers still own their authorization protocol and KV key selection.
+
+```rust,ignore
+let tokens = kinetix_plugin_sdk::oauth::parse_token_response(body, previous_refresh, now_ms)?;
+if kinetix_plugin_sdk::oauth::needs_refresh(expires_at_ms, now_ms, refresh_lead_ms) {
+    // Refresh using the provider-specific endpoint, then persist the full state.
+}
+```

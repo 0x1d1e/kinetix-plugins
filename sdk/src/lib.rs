@@ -70,3 +70,4 @@ pub mod prelude {
 
 pub mod helpers;
 pub mod model_capabilities;
+pub mod oauth;

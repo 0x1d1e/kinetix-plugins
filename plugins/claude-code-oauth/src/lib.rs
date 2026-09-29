@@ -63,16 +63,21 @@ fn credential_from_host(provider_id: &str, account_id: &str) -> Result<Credentia
 
 fn load_credential(provider_id: &str, account_id: &str) -> Result<Credential, PluginError> {
     let key = credential_state_key(provider_id, account_id);
-    if let Some(raw) = kinetix_plugin_sdk::helpers::kv_get_string(&key) {
-        if let Ok(saved) = serde_json::from_str::<Credential>(&raw) {
-            if saved
-                .refresh_token
-                .as_deref()
-                .is_some_and(|v| !v.is_empty())
-                || saved.access_token.as_deref().is_some_and(|v| !v.is_empty())
-            {
-                return Ok(saved);
-            }
+    let saved =
+        kinetix_plugin_sdk::oauth::load_persisted_credential::<Credential>(&key).map_err(|e| {
+            kinetix_plugin_sdk::helpers::error(
+                "invalid_configuration",
+                format!("invalid persisted Claude Code OAuth state: {e}"),
+            )
+        })?;
+    if let Some(saved) = saved {
+        if saved
+            .refresh_token
+            .as_deref()
+            .is_some_and(|v| !v.is_empty())
+            || saved.access_token.as_deref().is_some_and(|v| !v.is_empty())
+        {
+            return Ok(saved);
         }
     }
     credential_from_host(provider_id, account_id)
@@ -83,11 +88,11 @@ fn persist_credential(
     account_id: &str,
     cred: &Credential,
 ) -> Result<(), PluginError> {
-    let raw = serde_json::to_string(cred).map_err(|e| {
-        kinetix_plugin_sdk::helpers::error("plugin_internal", format!("encoding credential: {e}"))
-    })?;
-    kinetix_plugin_sdk::helpers::kv_put_string(&credential_state_key(provider_id, account_id), &raw)
-        .map_err(|e| kinetix_plugin_sdk::helpers::error("plugin_internal", e))
+    kinetix_plugin_sdk::oauth::persist_rotated_credential(
+        &credential_state_key(provider_id, account_id),
+        cred,
+    )
+    .map_err(|e| kinetix_plugin_sdk::helpers::error("plugin_internal", e))
 }
 
 fn access_token_valid(cred: &Credential, now_ms: u64) -> bool {
@@ -96,45 +101,13 @@ fn access_token_valid(cred: &Credential, now_ms: u64) -> bool {
     };
     let _ = token;
     match cred.expires_at_ms {
-        Some(expiry) => expiry.saturating_sub(now_ms) > REFRESH_LEAD_MS,
+        Some(expiry) => !kinetix_plugin_sdk::oauth::needs_refresh(expiry, now_ms, REFRESH_LEAD_MS),
         None => true,
     }
 }
 
 fn format_unix_ms_rfc3339(ms: u64) -> Option<String> {
-    const SECONDS_PER_DAY: u64 = 86_400;
-
-    let total_seconds = ms / 1_000;
-    let millis = ms % 1_000;
-    let days = i64::try_from(total_seconds / SECONDS_PER_DAY).ok()?;
-    let seconds_of_day = total_seconds % SECONDS_PER_DAY;
-
-    // Howard Hinnant's civil-from-days conversion, with Unix epoch offset.
-    let z = days.checked_add(719_468)?;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let mut year = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = mp + if mp < 10 { 3 } else { -9 };
-    if month <= 2 {
-        year += 1;
-    }
-
-    // RFC3339's date production uses a four-digit year.
-    if !(0..=9_999).contains(&year) {
-        return None;
-    }
-
-    let hour = seconds_of_day / 3_600;
-    let minute = (seconds_of_day % 3_600) / 60;
-    let second = seconds_of_day % 60;
-
-    Some(format!(
-        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z"
-    ))
+    kinetix_plugin_sdk::oauth::format_rfc3339_ms(ms)
 }
 
 fn lease_timing(cred: &Credential) -> (Option<String>, Option<String>) {
@@ -148,48 +121,18 @@ fn lease_timing(cred: &Credential) -> (Option<String>, Option<String>) {
     )
 }
 
-fn token_expires_at_ms(value: &serde_json::Value, now_ms: u64) -> Option<u64> {
-    value
-        .get("expires_in")
-        .and_then(|v| v.as_u64())
-        .and_then(|seconds| seconds.checked_mul(1_000))
-        .map(|ttl_ms| now_ms.saturating_add(ttl_ms))
-}
-
 fn parse_token_response_at(
     body: &str,
     previous_refresh: Option<&str>,
     now_ms: u64,
 ) -> Result<Credential, String> {
-    let value: serde_json::Value =
-        serde_json::from_str(body).map_err(|e| format!("invalid token JSON: {e}"))?;
-
-    let access_token = value
-        .get("access_token")
-        .and_then(|v| v.as_str())
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| "token response missing access_token".to_string())?
-        .to_string();
-
-    let refresh_token = value
-        .get("refresh_token")
-        .and_then(|v| v.as_str())
-        .filter(|v| !v.is_empty())
-        .map(str::to_string)
-        .or_else(|| previous_refresh.map(str::to_string));
-
+    let tokens = kinetix_plugin_sdk::oauth::parse_token_response(body, previous_refresh, now_ms)?;
     Ok(Credential {
-        access_token: Some(access_token),
-        refresh_token,
-        expires_at_ms: token_expires_at_ms(&value, now_ms),
-        scope: value
-            .get("scope")
-            .and_then(|v| v.as_str())
-            .map(str::to_string),
-        token_type: value
-            .get("token_type")
-            .and_then(|v| v.as_str())
-            .map(str::to_string),
+        access_token: Some(tokens.access_token),
+        refresh_token: tokens.refresh_token,
+        expires_at_ms: tokens.expires_at_ms,
+        scope: tokens.scope,
+        token_type: tokens.token_type,
     })
 }
 
@@ -199,6 +142,18 @@ fn parse_token_response(body: &str, previous_refresh: Option<&str>) -> Result<Cr
         previous_refresh,
         kinetix_plugin_sdk::helpers::now_unix_millis(),
     )
+}
+
+fn oauth_refresh_plugin_error(error: kinetix_plugin_sdk::oauth::OAuthRefreshError) -> PluginError {
+    if error.retryable {
+        kinetix_plugin_sdk::helpers::retryable_error(
+            error.code,
+            error.message,
+            error.retry_after_secs,
+        )
+    } else {
+        kinetix_plugin_sdk::helpers::error(error.code, error.message)
+    }
 }
 
 fn refresh(cred: &Credential) -> Result<Credential, PluginError> {
@@ -232,14 +187,18 @@ fn refresh(cred: &Credential) -> Result<Credential, PluginError> {
     };
 
     let resp = kinetix::plugin::host_http::send(&req).map_err(|e| {
-        kinetix_plugin_sdk::helpers::retryable_error(&e.code, e.message, e.retry_after)
+        oauth_refresh_plugin_error(kinetix_plugin_sdk::oauth::classify_refresh_transport_error(
+            &e.code,
+            &e.message,
+            e.retry_after,
+        ))
     })?;
 
     if resp.body_truncated {
-        return Err(kinetix_plugin_sdk::helpers::retryable_error(
-            "upstream_unavailable",
-            "Claude OAuth token response was truncated",
-            Some(5),
+        return Err(oauth_refresh_plugin_error(
+            kinetix_plugin_sdk::oauth::retryable_refresh_error(
+                "Claude OAuth token response was truncated",
+            ),
         ));
     }
 
@@ -251,13 +210,9 @@ fn refresh(cred: &Credential) -> Result<Credential, PluginError> {
     })?;
 
     if resp.status != 200 {
-        let retryable = resp.status >= 500 || resp.status == 429;
-        let message = format!("Claude OAuth refresh returned HTTP {}", resp.status);
-        return Err(if retryable {
-            kinetix_plugin_sdk::helpers::retryable_error("upstream_unavailable", message, Some(5))
-        } else {
-            kinetix_plugin_sdk::helpers::error("credential_expired", message)
-        });
+        return Err(oauth_refresh_plugin_error(
+            kinetix_plugin_sdk::oauth::classify_refresh_http_error(resp.status, &text),
+        ));
     }
 
     parse_token_response(&text, Some(refresh_token))
@@ -467,52 +422,26 @@ impl auth_world::exports::auth_flow::Guest for Component {
             ));
         }
 
-        let value: serde_json::Value = serde_json::from_str(&text)
-            .map_err(|e| auth_error("protocol_error", format!("invalid token JSON: {e}"), false))?;
-
-        let access_token = value
-            .get("access_token")
-            .and_then(|v| v.as_str())
-            .filter(|v| !v.is_empty())
-            .ok_or_else(|| {
-                auth_error(
-                    "protocol_error",
-                    "token response missing access_token",
-                    false,
-                )
-            })?
-            .to_string();
-
-        let refresh_token = value
-            .get("refresh_token")
-            .and_then(|v| v.as_str())
-            .filter(|v| !v.is_empty())
-            .ok_or_else(|| {
-                auth_error(
-                    "credential_expired",
-                    "token response missing refresh_token",
-                    false,
-                )
-            })?
-            .to_string();
-
-        let expires_at_ms = token_expires_at_ms(
-            &value,
+        let tokens = kinetix_plugin_sdk::oauth::parse_token_response(
+            &text,
+            None,
             auth_world::kinetix::plugin::host_clock::now_unix_millis(),
-        );
+        )
+        .map_err(|e| auth_error("protocol_error", e, false))?;
+        let refresh_token = tokens.refresh_token.ok_or_else(|| {
+            auth_error(
+                "credential_expired",
+                "token response missing refresh_token",
+                false,
+            )
+        })?;
 
         let credential = Credential {
-            access_token: Some(access_token),
+            access_token: Some(tokens.access_token),
             refresh_token: Some(refresh_token),
-            expires_at_ms,
-            scope: value
-                .get("scope")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-            token_type: value
-                .get("token_type")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
+            expires_at_ms: tokens.expires_at_ms,
+            scope: tokens.scope,
+            token_type: tokens.token_type,
         };
 
         let secret_json = serde_json::to_string(&credential).map_err(|e| {
@@ -662,9 +591,14 @@ mod tests {
 
     #[test]
     fn out_of_range_expires_in_does_not_fabricate_expiry() {
-        let value = serde_json::json!({"expires_in": u64::MAX});
+        let cred = parse_token_response_at(
+            r#"{"access_token":"access","expires_in":18446744073709551615}"#,
+            None,
+            0,
+        )
+        .unwrap();
 
-        assert_eq!(token_expires_at_ms(&value, 0), None);
+        assert_eq!(cred.expires_at_ms, None);
     }
 
     #[test]

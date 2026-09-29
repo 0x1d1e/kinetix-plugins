@@ -675,6 +675,7 @@ fn add_nullable_type(schema: &mut Map<String, Value>, path: &str) -> Result<(), 
     ))
 }
 
+#[cfg(test)]
 fn sanitize_schema(schema: &Value, root_path: &str) -> Result<Value, AdapterError> {
     sanitize_schema_with_policy(schema, root_path, SchemaPolicy::Strict)
 }

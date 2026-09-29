@@ -148,15 +148,17 @@ fn target_format(id: &str) -> &'static str {
 }
 
 fn normalized_capabilities(id: &str, entry: Option<&CatalogEntry>) -> Result<String, PluginError> {
-    let mut capabilities = ModelCapabilitiesV1::default();
-    capabilities.transport = Some(TransportCapability::new(target_format(id)));
-    capabilities.prices = Some(serde_json::json!({
-        "input_per_1m": 0.0,
-        "output_per_1m": 0.0,
-        "cached_per_1m": 0.0,
-        "cache_write_per_1m": 0.0,
-        "thinking_per_1m": 0.0
-    }));
+    let mut capabilities = ModelCapabilitiesV1 {
+        transport: Some(TransportCapability::new(target_format(id))),
+        prices: Some(serde_json::json!({
+            "input_per_1m": 0.0,
+            "output_per_1m": 0.0,
+            "cached_per_1m": 0.0,
+            "cache_write_per_1m": 0.0,
+            "thinking_per_1m": 0.0
+        })),
+        ..Default::default()
+    };
     if let Some(entry) = entry {
         capabilities.reasoning = entry.reasoning.as_ref().map(|reasoning| {
             if !reasoning.supported {
