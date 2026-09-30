@@ -10,6 +10,7 @@ use std::{collections::HashSet, fmt};
 pub const MODEL_CAPABILITIES_SCHEMA_V1: u32 = 1;
 pub const MODEL_CAPABILITIES_SCHEMA_VERSION: u32 = MODEL_CAPABILITIES_SCHEMA_V1;
 pub const MODEL_CAPABILITIES_SCHEMA_V2: u32 = 2;
+pub const MODEL_CAPABILITIES_SCHEMA_V3: u32 = 3;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -224,6 +225,98 @@ impl ModelCapabilitiesV2 {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ModelCapabilitiesV3 {
+    pub schema_version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transport: Option<ModelTransportCapability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<SupportCapability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<ReasoningCapability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<SupportCapability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parallel_tools: Option<SupportCapability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vision: Option<VisionCapability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub structured_output: Option<SupportCapability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modalities: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prices: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identity: Option<ModelIdentityV2>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opaque_state: Option<OpaqueStateCapabilityV1>,
+}
+
+impl Default for ModelCapabilitiesV3 {
+    fn default() -> Self {
+        Self {
+            schema_version: MODEL_CAPABILITIES_SCHEMA_V3,
+            transport: None,
+            text: None,
+            reasoning: None,
+            tools: None,
+            parallel_tools: None,
+            vision: None,
+            structured_output: None,
+            modalities: None,
+            prices: None,
+            identity: None,
+            opaque_state: None,
+        }
+    }
+}
+
+impl ModelCapabilitiesV3 {
+    pub fn validate(&self) -> Result<(), CapabilityMetadataError> {
+        if self.schema_version != MODEL_CAPABILITIES_SCHEMA_V3 {
+            return Err(CapabilityMetadataError::validation(format!(
+                "unsupported schema_version {}; expected {}",
+                self.schema_version, MODEL_CAPABILITIES_SCHEMA_V3
+            )));
+        }
+        if let Some(transport) = &self.transport {
+            transport.validate()?;
+        }
+        if self
+            .parallel_tools
+            .as_ref()
+            .is_some_and(|parallel| parallel.supported)
+            && !self.tools.as_ref().is_some_and(|tools| tools.supported)
+        {
+            return Err(CapabilityMetadataError::validation(
+                "parallel_tools.supported requires tools.supported",
+            ));
+        }
+        if let Some(reasoning) = &self.reasoning {
+            reasoning.validate()?;
+        }
+        if let Some(identity) = &self.identity {
+            identity.validate()?;
+        }
+        if let Some(opaque_state) = &self.opaque_state {
+            opaque_state.validate()?;
+        }
+        validate_prices(self.prices.as_ref())
+    }
+
+    pub fn to_json(&self) -> Result<String, CapabilityMetadataError> {
+        self.validate()?;
+        serde_json::to_string(self).map_err(CapabilityMetadataError::Json)
+    }
+
+    pub fn from_json(value: &str) -> Result<Self, CapabilityMetadataError> {
+        let metadata: Self = serde_json::from_str(value).map_err(CapabilityMetadataError::Json)?;
+        metadata.validate()?;
+        Ok(metadata)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ModelIdentityV2 {
     pub canonical_model_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -362,6 +455,114 @@ fn validate_prices(prices: Option<&serde_json::Value>) -> Result<(), CapabilityM
         }
     }
     Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelTransportCapability {
+    pub format: TransportFormat,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternatives: Vec<TransportOption>,
+}
+
+impl ModelTransportCapability {
+    pub fn new(format: TransportFormat) -> Self {
+        Self {
+            format,
+            endpoint: None,
+            alternatives: Vec::new(),
+        }
+    }
+
+    pub fn at_endpoint(format: TransportFormat, endpoint: impl Into<String>) -> Self {
+        Self {
+            format,
+            endpoint: Some(endpoint.into()),
+            alternatives: Vec::new(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), CapabilityMetadataError> {
+        let preferred = TransportOption {
+            format: self.format,
+            endpoint: self.endpoint.clone(),
+        };
+        preferred.validate()?;
+        let mut options = HashSet::new();
+        options.insert(preferred);
+        for alternative in &self.alternatives {
+            alternative.validate()?;
+            if !options.insert(alternative.clone()) {
+                return Err(CapabilityMetadataError::validation(
+                    "transport alternatives must not duplicate the preferred or another alternative",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TransportOption {
+    pub format: TransportFormat,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+}
+
+impl TransportOption {
+    pub fn new(format: TransportFormat) -> Self {
+        Self {
+            format,
+            endpoint: None,
+        }
+    }
+
+    pub fn at_endpoint(format: TransportFormat, endpoint: impl Into<String>) -> Self {
+        Self {
+            format,
+            endpoint: Some(endpoint.into()),
+        }
+    }
+
+    fn validate(&self) -> Result<(), CapabilityMetadataError> {
+        let Some(endpoint) = &self.endpoint else {
+            return Ok(());
+        };
+        if !endpoint.starts_with('/')
+            || endpoint.starts_with("//")
+            || endpoint.trim() != endpoint
+            || endpoint.chars().any(|character| {
+                character.is_control()
+                    || character.is_whitespace()
+                    || matches!(character, '?' | '#' | '\\')
+            })
+            || endpoint
+                .split('/')
+                .any(|segment| matches!(segment, "." | ".."))
+        {
+            return Err(CapabilityMetadataError::validation(
+                "transport endpoint must be a relative path without query, fragment, whitespace, or dot segments",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum TransportFormat {
+    #[serde(rename = "openai-chat")]
+    OpenAiChat,
+    #[serde(rename = "openai-responses")]
+    OpenAiResponses,
+    #[serde(rename = "anthropic")]
+    Anthropic,
+    #[serde(rename = "gemini")]
+    Gemini,
+    #[serde(rename = "plugin-native")]
+    PluginNative,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -674,6 +875,76 @@ mod tests {
         for value in malformed {
             assert!(ModelCapabilitiesV2::from_json(&value.to_string()).is_err());
         }
+    }
+
+    #[test]
+    fn v3_transport_preferences_and_alternatives_round_trip() {
+        let mut capabilities = ModelCapabilitiesV3::default();
+        capabilities.transport = Some(ModelTransportCapability {
+            format: TransportFormat::OpenAiResponses,
+            endpoint: Some("/zen/v1/responses".into()),
+            alternatives: vec![TransportOption::at_endpoint(
+                TransportFormat::OpenAiChat,
+                "/zen/v1/chat/completions",
+            )],
+        });
+        capabilities.tools = Some(SupportCapability::new(true));
+        capabilities.parallel_tools = Some(SupportCapability::new(true));
+
+        let encoded = capabilities.to_json().unwrap();
+        let decoded = ModelCapabilitiesV3::from_json(&encoded).unwrap();
+        assert_eq!(decoded, capabilities);
+        assert!(encoded.contains("\"format\":\"openai-responses\""));
+        assert!(encoded.contains("\"endpoint\":\"/zen/v1/responses\""));
+    }
+
+    #[test]
+    fn v3_transport_rejects_invalid_endpoints_and_duplicate_options() {
+        for endpoint in [
+            "https://example.com/path",
+            "//example.com/path",
+            "/a/../b",
+            "/a?query=1",
+            "/a#fragment",
+            "/a\\\\b",
+        ] {
+            let mut capabilities = ModelCapabilitiesV3::default();
+            capabilities.transport = Some(ModelTransportCapability::at_endpoint(
+                TransportFormat::OpenAiChat,
+                endpoint,
+            ));
+            assert!(capabilities.to_json().is_err(), "{endpoint}");
+        }
+
+        let mut capabilities = ModelCapabilitiesV3::default();
+        let option = TransportOption::at_endpoint(TransportFormat::OpenAiChat, "/chat");
+        capabilities.transport = Some(ModelTransportCapability {
+            format: option.format,
+            endpoint: option.endpoint.clone(),
+            alternatives: vec![option],
+        });
+        assert!(capabilities.to_json().is_err());
+    }
+
+    #[test]
+    fn v3_parallel_tools_requires_tools() {
+        let mut capabilities = ModelCapabilitiesV3::default();
+        capabilities.parallel_tools = Some(SupportCapability::new(true));
+        assert!(capabilities.to_json().is_err());
+
+        capabilities.tools = Some(SupportCapability::new(false));
+        assert!(capabilities.to_json().is_err());
+
+        capabilities.tools = Some(SupportCapability::new(true));
+        assert!(capabilities.to_json().is_ok());
+    }
+
+    #[test]
+    fn v3_rejects_unknown_transport_families() {
+        assert!(ModelCapabilitiesV3::from_json(
+            r#"{"schema_version":3,"transport":{"preferred":{"format":"unknown"}}}"#
+        )
+        .is_err());
     }
 
     #[test]

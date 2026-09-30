@@ -10,7 +10,43 @@
       },
       "tools": true,
       "structured_output": true,
-      "source": "https://mimo.mi.com/models/en-US/mimo-v2.6-flash"
+      "transport": {
+        "format": "openai-chat",
+        "endpoint": "/zen/v1/chat/completions"
+      },
+      "source": "https://dev.opencode.ai/docs/zen"
+    },
+    {
+      "ids": [
+        "mimo-v2.5-free",
+        "big-pickle",
+        "space-bunny-free",
+        "longcat-2.5-preview-free",
+        "ling-3.0-flash-fin-free",
+        "nemotron-3-ultra-free",
+        "nemotron-3.5-lightning-free"
+      ],
+      "transport": {
+        "format": "openai-chat",
+        "endpoint": "/zen/v1/chat/completions"
+      },
+      "source": "https://dev.opencode.ai/docs/zen"
+    },
+    {
+      "ids": ["muse-spark-1.2-contributor-free", "muse-spark-1.3-contributor-free"],
+      "transport": {
+        "format": "openai-responses",
+        "endpoint": "/zen/v1/responses"
+      },
+      "source": "https://dev.opencode.ai/docs/zen"
+    },
+    {
+      "ids": ["union-alpha"],
+      "transport": {
+        "format": "anthropic",
+        "endpoint": "/zen/v1/messages"
+      },
+      "source": "https://github.com/PrightCord/kinetix-plugins/issues/41"
     }
   ]
 }

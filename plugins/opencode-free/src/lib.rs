@@ -10,7 +10,8 @@ use kinetix::plugin::types::*;
 use kinetix_plugin_sdk::{
     export, exports, kinetix,
     model_capabilities::{
-        ModelCapabilitiesV1, ReasoningCapability, SupportCapability, TransportCapability,
+        ModelCapabilitiesV3, ModelTransportCapability, ReasoningCapability, SupportCapability,
+        TransportFormat,
     },
 };
 use serde::Deserialize;
@@ -31,12 +32,16 @@ struct Catalog {
 #[derive(Clone, Debug, Deserialize)]
 struct CatalogEntry {
     ids: Vec<String>,
+    #[serde(default)]
+    id_prefixes: Vec<String>,
     display_name: Option<String>,
     context_window: Option<u64>,
     max_output_tokens: Option<u64>,
     reasoning: Option<CatalogReasoning>,
     tools: Option<bool>,
     structured_output: Option<bool>,
+    parallel_tools: Option<bool>,
+    transport: Option<ModelTransportCapability>,
     #[serde(rename = "source")]
     _source: String,
 }
@@ -51,10 +56,41 @@ struct CatalogReasoning {
 fn catalog_entry(id: &str) -> Result<Option<CatalogEntry>, String> {
     let catalog: Catalog = serde_json::from_str(MODEL_CATALOG)
         .map_err(|error| format!("invalid models.json: {error}"))?;
-    Ok(catalog
+    let exact: Vec<_> = catalog
         .models
+        .iter()
+        .filter(|entry| entry.ids.iter().any(|known| known == id))
+        .collect();
+    if exact.len() > 1 {
+        return Err(format!("ambiguous exact model catalog entries for '{id}'"));
+    }
+    if let Some(entry) = exact.first() {
+        return Ok(Some((*entry).clone()));
+    }
+
+    let matching_prefixes: Vec<_> = catalog
+        .models
+        .iter()
+        .flat_map(|entry| {
+            entry
+                .id_prefixes
+                .iter()
+                .filter(move |prefix| id.starts_with(prefix.as_str()))
+                .map(move |prefix| (entry, prefix.len()))
+        })
+        .collect();
+    let Some(longest) = matching_prefixes.iter().map(|(_, len)| *len).max() else {
+        return Ok(None);
+    };
+    let best: Vec<_> = matching_prefixes
         .into_iter()
-        .find(|entry| entry.ids.iter().any(|known| known == id)))
+        .filter(|(_, len)| *len == longest)
+        .map(|(entry, _)| entry)
+        .collect();
+    if best.len() != 1 {
+        return Err(format!("ambiguous model catalog prefixes for '{id}'"));
+    }
+    Ok(Some(best[0].clone()))
 }
 
 const KNOWN_FREE_IDS: &[&str] = &[
@@ -137,28 +173,16 @@ fn is_free_model(id: &str) -> bool {
     (id.ends_with("-free") || KNOWN_FREE_IDS.contains(&id)) && !DEAD_FREE_IDS.contains(&id)
 }
 
-fn target_format(id: &str) -> &'static str {
-    if id.starts_with("muse-spark-") {
-        "openai-responses"
-    } else if id == "union-alpha" {
-        "claude"
-    } else {
-        "openai"
-    }
-}
-
-fn normalized_capabilities(id: &str, entry: Option<&CatalogEntry>) -> Result<String, PluginError> {
-    let mut capabilities = ModelCapabilitiesV1 {
-        transport: Some(TransportCapability::new(target_format(id))),
-        prices: Some(serde_json::json!({
-            "input_per_1m": 0.0,
-            "output_per_1m": 0.0,
-            "cached_per_1m": 0.0,
-            "cache_write_per_1m": 0.0,
-            "thinking_per_1m": 0.0
-        })),
-        ..Default::default()
-    };
+fn normalized_capabilities(entry: Option<&CatalogEntry>) -> Result<String, PluginError> {
+    let mut capabilities = ModelCapabilitiesV3::default();
+    capabilities.transport = entry.and_then(|entry| entry.transport.clone());
+    capabilities.prices = Some(serde_json::json!({
+        "input_per_1m": 0.0,
+        "output_per_1m": 0.0,
+        "cached_per_1m": 0.0,
+        "cache_write_per_1m": 0.0,
+        "thinking_per_1m": 0.0
+    }));
     if let Some(entry) = entry {
         capabilities.reasoning = entry.reasoning.as_ref().map(|reasoning| {
             if !reasoning.supported {
@@ -176,6 +200,7 @@ fn normalized_capabilities(id: &str, entry: Option<&CatalogEntry>) -> Result<Str
             }
         });
         capabilities.tools = entry.tools.map(SupportCapability::new);
+        capabilities.parallel_tools = entry.parallel_tools.map(SupportCapability::new);
         capabilities.structured_output = entry.structured_output.map(SupportCapability::new);
     }
     capabilities.to_json().map_err(|error| {
@@ -185,6 +210,15 @@ fn normalized_capabilities(id: &str, entry: Option<&CatalogEntry>) -> Result<Str
             false,
         )
     })
+}
+
+fn raw_metadata_with_capabilities(item: &Value, capabilities_json: &str) -> Option<String> {
+    let mut metadata = item.clone();
+    let capabilities = serde_json::from_str(capabilities_json).ok()?;
+    metadata
+        .as_object_mut()?
+        .insert("kinetix_plugin_capabilities".into(), capabilities);
+    serde_json::to_string(&metadata).ok()
 }
 
 fn parse_model_list(value: &Value) -> Result<Vec<DiscoveredModel>, PluginError> {
@@ -210,7 +244,7 @@ fn parse_model_list(value: &Value) -> Result<Vec<DiscoveredModel>, PluginError> 
             .map(str::to_string)
             .or_else(|| entry.as_ref().and_then(|entry| entry.display_name.clone()))
             .unwrap_or_else(|| id.to_string());
-        let capabilities_json = normalized_capabilities(id, entry.as_ref())?;
+        let capabilities_json = normalized_capabilities(entry.as_ref())?;
 
         models.push(DiscoveredModel {
             id: id.to_string(),
@@ -225,8 +259,9 @@ fn parse_model_list(value: &Value) -> Result<Vec<DiscoveredModel>, PluginError> 
                 .or_else(|| item.get("maxOutputTokens"))
                 .and_then(Value::as_u64)
                 .or_else(|| entry.as_ref().and_then(|entry| entry.max_output_tokens)),
+            raw_metadata: raw_metadata_with_capabilities(item, &capabilities_json)
+                .or_else(|| serde_json::to_string(item).ok()),
             capabilities_json: Some(capabilities_json),
-            raw_metadata: serde_json::to_string(item).ok(),
         });
     }
 
@@ -538,6 +573,23 @@ mod tests {
     }
 
     #[test]
+    fn raw_metadata_preserves_normalized_capabilities_for_model_rows() {
+        let value = serde_json::json!({
+            "data": [{"id":"union-alpha","name":"Union Alpha"}]
+        });
+        let model = parse_model_list(&value).unwrap().remove(0);
+        let raw_metadata: Value =
+            serde_json::from_str(model.raw_metadata.as_deref().unwrap()).unwrap();
+        let capabilities =
+            ModelCapabilitiesV3::from_json(model.capabilities_json.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            raw_metadata["kinetix_plugin_capabilities"],
+            serde_json::to_value(capabilities).unwrap()
+        );
+        assert_eq!(raw_metadata["id"], "union-alpha");
+    }
+
+    #[test]
     fn tags_muse_models_as_responses() {
         let value = serde_json::json!({
             "data": [
@@ -552,14 +604,46 @@ mod tests {
             .find(|m| m.id.starts_with("muse-spark"))
             .unwrap();
         let caps =
-            ModelCapabilitiesV1::from_json(muse.capabilities_json.as_deref().unwrap()).unwrap();
-        assert_eq!(caps.schema_version, 1);
+            ModelCapabilitiesV3::from_json(muse.capabilities_json.as_deref().unwrap()).unwrap();
+        assert_eq!(caps.schema_version, 3);
+        assert_eq!(
+            caps.transport.as_ref().map(|transport| transport.format),
+            Some(TransportFormat::OpenAiResponses)
+        );
         assert_eq!(
             caps.transport
                 .as_ref()
-                .map(|transport| transport.format.as_str()),
-            Some("openai-responses")
+                .and_then(|transport| transport.endpoint.as_deref()),
+            Some("/zen/v1/responses")
         );
+    }
+
+    #[test]
+    fn discovers_union_alpha_with_anthropic_transport() {
+        let value = serde_json::json!({
+            "data": [{"id":"union-alpha","name":"Union Alpha"}]
+        });
+        let models = parse_model_list(&value).unwrap();
+        assert_eq!(models.len(), 1);
+        let capabilities =
+            ModelCapabilitiesV3::from_json(models[0].capabilities_json.as_deref().unwrap())
+                .unwrap();
+        let transport = capabilities.transport.unwrap();
+        assert_eq!(transport.format, TransportFormat::Anthropic);
+        assert_eq!(transport.endpoint.as_deref(), Some("/zen/v1/messages"));
+    }
+
+    #[test]
+    fn unknown_free_models_are_discovered_without_an_invented_transport() {
+        let value = serde_json::json!({
+            "data": [{"id":"jev-1.13-free"}]
+        });
+        let models = parse_model_list(&value).unwrap();
+        assert_eq!(models.len(), 1);
+        let capabilities =
+            ModelCapabilitiesV3::from_json(models[0].capabilities_json.as_deref().unwrap())
+                .unwrap();
+        assert!(capabilities.transport.is_none());
     }
 
     #[test]
@@ -575,7 +659,7 @@ mod tests {
         assert_eq!(model.max_output_tokens, Some(128_000));
 
         let caps =
-            ModelCapabilitiesV1::from_json(model.capabilities_json.as_deref().unwrap()).unwrap();
+            ModelCapabilitiesV3::from_json(model.capabilities_json.as_deref().unwrap()).unwrap();
         assert_eq!(
             caps.reasoning.as_ref().map(|reasoning| reasoning.supported),
             Some(true)
@@ -616,7 +700,7 @@ mod tests {
 
         for model in parse_model_list(&value).unwrap() {
             let capabilities =
-                ModelCapabilitiesV1::from_json(model.capabilities_json.as_deref().unwrap())
+                ModelCapabilitiesV3::from_json(model.capabilities_json.as_deref().unwrap())
                     .unwrap();
             assert_eq!(
                 capabilities.prices,

@@ -26,6 +26,22 @@ credential_strategy = "antigravity-oauth"
 auth_flow = "antigravity"
 model_source = "antigravity-models"
 
+[integrations.features]
+schema_version = 1
+streaming = true
+tools = true
+parallel_tools = true
+vision = true
+reasoning = true
+structured_output = false
+model_discovery = true
+quota_probe = false
+health_probe = false
+
+[integrations.protocols]
+input = ["openai-chat", "openai-responses", "anthropic"]
+upstream = ["plugin-native"]
+
 [integrations.provider]
 base_url = "https://daily-cloudcode-pa.googleapis.com"
 wire_format = "plugin"

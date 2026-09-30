@@ -5,6 +5,9 @@
 
 use std::collections::HashSet;
 
+use kinetix_plugin_sdk::model_capabilities::{
+    ModelCapabilitiesV3, ModelTransportCapability, TransportFormat,
+};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -43,8 +46,103 @@ fn model_id(model: &Value) -> Option<&str> {
         .filter(|v| !v.is_empty())
 }
 
-fn is_responses_model(id: &str) -> bool {
-    id.starts_with("muse-spark-")
+fn capability_value(value: &Value) -> Result<ModelCapabilitiesV3, String> {
+    let raw = match value {
+        Value::String(raw) => raw.clone(),
+        value => serde_json::to_string(value).map_err(|error| error.to_string())?,
+    };
+    ModelCapabilitiesV3::from_json(&raw).map_err(|error| error.to_string())
+}
+
+fn legacy_transport(value: &Value) -> Option<ModelTransportCapability> {
+    let (format, endpoint) = match value.as_str()? {
+        "openai-chat" => (TransportFormat::OpenAiChat, "/zen/v1/chat/completions"),
+        "openai-responses" => (TransportFormat::OpenAiResponses, "/zen/v1/responses"),
+        "anthropic" => (TransportFormat::Anthropic, "/zen/v1/messages"),
+        _ => return None,
+    };
+    Some(ModelTransportCapability::at_endpoint(format, endpoint))
+}
+
+fn model_transport(model: &Value) -> Result<ModelTransportCapability, AdapterError> {
+    let mut candidates = Vec::new();
+    if let Some(value) = model.get("capabilities_json") {
+        candidates.push(value.clone());
+    }
+    if let Some(value) = model.get("capabilities") {
+        candidates.push(value.clone());
+    }
+
+    let discovery = model.get("discovery").and_then(|value| match value {
+        Value::String(raw) => serde_json::from_str::<Value>(raw).ok(),
+        value => Some(value.clone()),
+    });
+    let mut legacy_transports = Vec::new();
+    if let Some(discovery) = discovery {
+        for pointer in [
+            "/kinetix_plugin_capabilities",
+            "/model_capabilities",
+            "/capabilities_json",
+            "/latest_observation/kinetix_plugin_capabilities",
+            "/latest_observation/model_capabilities",
+            "/latest_observation/capabilities_json",
+            "/latest_observation/raw_metadata/kinetix_plugin_capabilities",
+            "/raw_metadata/kinetix_plugin_capabilities",
+        ] {
+            if let Some(value) = discovery.pointer(pointer) {
+                candidates.push(value.clone());
+            }
+        }
+        for pointer in ["/transport/format", "/latest_observation/transport/format"] {
+            if let Some(value) = discovery.pointer(pointer) {
+                legacy_transports.push(value.clone());
+            }
+        }
+    }
+
+    let mut saw_candidate = false;
+    let mut saw_valid_capabilities = false;
+    let mut parse_error = None;
+    for candidate in candidates {
+        saw_candidate = true;
+        match capability_value(&candidate) {
+            Ok(capabilities) => {
+                saw_valid_capabilities = true;
+                if let Some(transport) = capabilities.transport {
+                    return Ok(transport);
+                }
+            }
+            Err(error) => parse_error = Some(error),
+        }
+    }
+
+    // A valid current envelope is authoritative, including an explicit lack
+    // of transport. Only use normalized legacy discovery when there is no
+    // valid capability envelope to supersede it.
+    if !saw_valid_capabilities {
+        if let Some(transport) = legacy_transports.iter().find_map(legacy_transport) {
+            return Ok(transport);
+        }
+    }
+    if !saw_candidate && legacy_transports.is_empty() {
+        return Err(err(
+            "unsupported_transport",
+            "model transport metadata is required",
+        ));
+    }
+    if saw_valid_capabilities {
+        return Err(err(
+            "unsupported_transport",
+            "model transport is not declared",
+        ));
+    }
+    Err(err(
+        "unsupported_transport",
+        format!(
+            "invalid model transport metadata: {}",
+            parse_error.unwrap_or_else(|| "unknown metadata error".into())
+        ),
+    ))
 }
 
 pub fn build_url(provider_json: &str, model_json: &str) -> Result<String, AdapterError> {
@@ -52,14 +150,31 @@ pub fn build_url(provider_json: &str, model_json: &str) -> Result<String, Adapte
         .map_err(|e| err("bad_request", format!("bad provider json: {e}")))?;
     let model: Value = serde_json::from_str(model_json)
         .map_err(|e| err("bad_request", format!("bad model json: {e}")))?;
-    let id = model_id(&model).ok_or_else(|| err("bad_request", "model id is required"))?;
-    let base = base_url(&provider).trim_end_matches('/');
-
-    if is_responses_model(id) {
-        Ok(format!("{base}/zen/v1/responses"))
-    } else {
-        Ok(format!("{base}/zen/v1/chat/completions"))
+    if model_id(&model).is_none() {
+        return Err(err("bad_request", "model id is required"));
     }
+    let transport = model_transport(&model)?;
+    match transport.format {
+        TransportFormat::OpenAiChat
+        | TransportFormat::OpenAiResponses
+        | TransportFormat::Anthropic => {}
+        _ => {
+            return Err(err(
+                "unsupported_transport",
+                "transport is not supported by OpenCode",
+            ))
+        }
+    }
+    let endpoint = transport.endpoint.as_deref().ok_or_else(|| {
+        err(
+            "unsupported_transport",
+            "model transport endpoint is not declared",
+        )
+    })?;
+    Ok(format!(
+        "{}{endpoint}",
+        base_url(&provider).trim_end_matches('/')
+    ))
 }
 
 const BASE62_CHARS: &[u8; 62] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -113,6 +228,8 @@ pub fn apply_auth(
 
     let mut headers = vec![
         json!(["Authorization", "Bearer public"]),
+        json!(["x-api-key", "public"]),
+        json!(["anthropic-version", "2023-06-01"]),
         json!(["x-opencode-client", "desktop"]),
         json!(["x-opencode-project", "default"]),
     ];
@@ -413,6 +530,205 @@ fn build_chat_body(req: &Value, model: &Value) -> Result<Value, AdapterError> {
     Ok(body)
 }
 
+fn build_anthropic_body(req: &Value, model: &Value) -> Result<Value, AdapterError> {
+    let mut messages = Vec::new();
+    let system = req
+        .get("system")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+
+    if let Some(input) = req.get("messages").and_then(Value::as_array) {
+        for (message_index, message) in input.iter().enumerate() {
+            let role = message
+                .get("role")
+                .and_then(Value::as_str)
+                .unwrap_or("user");
+            let parts = message
+                .get("parts")
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let mut content = Vec::new();
+
+            match role {
+                "assistant" => {
+                    for (part_index, part) in parts.iter().enumerate() {
+                        let location = format!("messages[{message_index}].parts[{part_index}]");
+                        match part.get("type").and_then(Value::as_str) {
+                            Some("text") => {
+                                if let Some(text) = part.get("text").and_then(Value::as_str) {
+                                    content.push(json!({"type":"text","text":text}));
+                                }
+                            }
+                            Some("thinking") => {
+                                if let (Some(text), Some(signature)) = (
+                                    part.get("text").and_then(Value::as_str),
+                                    part.get("signature").and_then(Value::as_str),
+                                ) {
+                                    content.push(json!({
+                                        "type":"thinking",
+                                        "thinking":text,
+                                        "signature":signature
+                                    }));
+                                }
+                            }
+                            Some("tool_call") => {
+                                let name = required_non_empty_part_str(part, "name", &location)?;
+                                let arguments = part
+                                    .get("arguments")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("{}");
+                                let input: Value =
+                                    serde_json::from_str(arguments).map_err(|error| {
+                                        err(
+                                            "invalid_request",
+                                            format!(
+                                                "{location} has invalid tool-call JSON: {error}"
+                                            ),
+                                        )
+                                    })?;
+                                content.push(json!({
+                                    "type":"tool_use",
+                                    "id":required_non_empty_part_str(part, "id", &location)?,
+                                    "name":name,
+                                    "input":input
+                                }));
+                            }
+                            Some("image") => {
+                                return Err(err(
+                                    "unsupported_capability",
+                                    "OpenCode Anthropic transport does not support image input",
+                                ));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                "tool" => {
+                    for part in parts {
+                        if part.get("type").and_then(Value::as_str) != Some("tool_result") {
+                            continue;
+                        }
+                        let mut result = json!({
+                            "type":"tool_result",
+                            "tool_use_id":required_non_empty_part_str(
+                                part,
+                                "tool_call_id",
+                                &format!("messages[{message_index}] tool result"),
+                            )?,
+                            "content":part.get("content").and_then(Value::as_str).unwrap_or("")
+                        });
+                        if part.get("is_error").and_then(Value::as_bool) == Some(true) {
+                            result["is_error"] = json!(true);
+                        }
+                        content.push(result);
+                    }
+                }
+                _ => {
+                    for part in parts {
+                        match part.get("type").and_then(Value::as_str) {
+                            Some("text") => {
+                                if let Some(text) = part.get("text").and_then(Value::as_str) {
+                                    content.push(json!({"type":"text","text":text}));
+                                }
+                            }
+                            Some("image") => {
+                                return Err(err(
+                                    "unsupported_capability",
+                                    "OpenCode Anthropic transport does not support image input",
+                                ));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
+            if !content.is_empty() {
+                messages.push(json!({
+                    "role":if role == "assistant" { "assistant" } else { "user" },
+                    "content":content
+                }));
+            }
+        }
+    }
+
+    let max_tokens = req
+        .get("max_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| model.get("max_output_tokens").and_then(Value::as_u64))
+        .unwrap_or(4096);
+    let mut body = json!({
+        "model":request_model(req, model),
+        "messages":messages,
+        "max_tokens":max_tokens,
+        "stream":true
+    });
+    if !system.is_empty() {
+        body["system"] = json!(system);
+    }
+    for (source, target) in [
+        ("temperature", "temperature"),
+        ("top_p", "top_p"),
+        ("stop", "stop_sequences"),
+    ] {
+        if let Some(value) = req.get(source).filter(|value| !value.is_null()) {
+            body[target] = value.clone();
+        }
+    }
+    if let Some(tools) = req.get("tools").and_then(Value::as_array) {
+        body["tools"] = Value::Array(
+            tools
+                .iter()
+                .map(|tool| {
+                    let mut declaration = json!({
+                        "name":tool.get("name").and_then(Value::as_str).unwrap_or("tool"),
+                        "input_schema":tool.get("parameters").cloned()
+                            .unwrap_or_else(|| json!({"type":"object","properties":{}}))
+                    });
+                    if let Some(description) = tool.get("description").and_then(Value::as_str) {
+                        declaration["description"] = json!(description);
+                    }
+                    declaration
+                })
+                .collect(),
+        );
+    }
+    ensure_required_anthropic_tools(&mut body);
+    Ok(body)
+}
+
+fn ensure_required_anthropic_tools(body: &mut Value) {
+    let Some(object) = body.as_object_mut() else {
+        return;
+    };
+    let tools = object
+        .entry("tools")
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let Some(tools) = tools.as_array_mut() else {
+        return;
+    };
+    for name in ["bash", "read"] {
+        if !tools
+            .iter()
+            .any(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
+        {
+            tools.push(json!({
+                "name":name,
+                "description":"This tool is unavailable and must not be used.",
+                "input_schema":{"type":"object","properties":{}}
+            }));
+        }
+    }
+}
+
 fn build_responses_body(req: &Value, model: &Value) -> Value {
     let mut input = Vec::new();
 
@@ -521,12 +837,17 @@ pub fn build_body(
     validate_tool_history(&req)?;
     let model: Value = serde_json::from_str(model_json)
         .map_err(|e| err("bad_request", format!("bad model json: {e}")))?;
-    let id = request_model(&req, &model);
-
-    let body = if is_responses_model(&id) {
-        build_responses_body(&req, &model)
-    } else {
-        build_chat_body(&req, &model)?
+    let transport = model_transport(&model)?;
+    let body = match transport.format {
+        TransportFormat::OpenAiChat => build_chat_body(&req, &model)?,
+        TransportFormat::OpenAiResponses => build_responses_body(&req, &model),
+        TransportFormat::Anthropic => build_anthropic_body(&req, &model)?,
+        _ => {
+            return Err(err(
+                "unsupported_transport",
+                "transport is not supported by OpenCode",
+            ))
+        }
     };
 
     Ok(body.to_string())
@@ -667,6 +988,123 @@ fn parse_chat(value: &Value) -> Vec<Value> {
     events
 }
 
+fn parse_anthropic(value: &Value) -> Result<Vec<Value>, AdapterError> {
+    let mut events = Vec::new();
+    let event_type = value.get("type").and_then(Value::as_str).unwrap_or("");
+    match event_type {
+        "message_start" => {
+            if let Some(message) = value.get("message") {
+                if let Some(id) = message.get("id").and_then(Value::as_str) {
+                    events.push(json!({"type":"start","upstream_request_id":id}));
+                }
+                if let Some(usage) = message.get("usage") {
+                    events.push(json!({
+                        "type":"usage",
+                        "input":usage.get("input_tokens").and_then(Value::as_u64),
+                        "output":Value::Null,
+                        "cached":usage.get("cache_read_input_tokens").and_then(Value::as_u64),
+                        "cache_write":usage.get("cache_creation_input_tokens").and_then(Value::as_u64),
+                        "thinking":Value::Null
+                    }));
+                }
+            }
+        }
+        "content_block_start" => {
+            let index = value.get("index").and_then(Value::as_u64).unwrap_or(0);
+            if let Some(block) = value.get("content_block") {
+                match block.get("type").and_then(Value::as_str) {
+                    Some("tool_use") => events.push(json!({
+                        "type":"tool_call_start",
+                        "index":index,
+                        "id":block.get("id").and_then(Value::as_str),
+                        "name":block.get("name").and_then(Value::as_str).unwrap_or(""),
+                        "signature":Value::Null
+                    })),
+                    Some("thinking") => {
+                        if let Some(signature) = block.get("signature").and_then(Value::as_str) {
+                            events.push(json!({
+                                "type":"thinking_delta",
+                                "text":"",
+                                "signature":signature
+                            }));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        "content_block_delta" => {
+            let delta = value.get("delta").unwrap_or(&Value::Null);
+            let index = value.get("index").and_then(Value::as_u64).unwrap_or(0);
+            match delta.get("type").and_then(Value::as_str) {
+                Some("text_delta") => {
+                    if let Some(text) = delta.get("text").and_then(Value::as_str) {
+                        if !text.is_empty() {
+                            events.push(json!({"type":"text_delta","text":text}));
+                        }
+                    }
+                }
+                Some("thinking_delta") => {
+                    if let Some(text) = delta.get("thinking").and_then(Value::as_str) {
+                        events.push(json!({"type":"thinking_delta","text":text}));
+                    }
+                }
+                Some("signature_delta") => {
+                    if let Some(signature) = delta.get("signature").and_then(Value::as_str) {
+                        events.push(json!({
+                            "type":"thinking_delta",
+                            "text":"",
+                            "signature":signature
+                        }));
+                    }
+                }
+                Some("input_json_delta") => {
+                    if let Some(args) = delta.get("partial_json").and_then(Value::as_str) {
+                        if !args.is_empty() {
+                            events.push(json!({
+                                "type":"tool_call_args_delta",
+                                "index":index,
+                                "args":args
+                            }));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        "message_delta" => {
+            if let Some(usage) = value.get("usage") {
+                events.push(json!({
+                    "type":"usage",
+                    "input":Value::Null,
+                    "output":usage.get("output_tokens").and_then(Value::as_u64),
+                    "cached":Value::Null,
+                    "cache_write":Value::Null,
+                    "thinking":usage.get("thinking_tokens").and_then(Value::as_u64)
+                }));
+            }
+            if let Some(reason) = value.pointer("/delta/stop_reason").and_then(Value::as_str) {
+                let reason = match reason {
+                    "tool_use" => "tool_calls",
+                    "max_tokens" => "length",
+                    "end_turn" | "stop_sequence" => "stop",
+                    _ => return Err(err("protocol_error", "unknown Anthropic finish reason")),
+                };
+                events.push(json!({"type":"finish","reason":reason}));
+            }
+        }
+        "error" => {
+            let message = value
+                .pointer("/error/message")
+                .and_then(Value::as_str)
+                .unwrap_or("Anthropic stream returned an error");
+            return Err(err("upstream_error", message));
+        }
+        _ => {}
+    }
+    Ok(events)
+}
+
 fn parse_responses(value: &Value) -> Vec<Value> {
     let mut events = Vec::new();
     match value.get("type").and_then(Value::as_str).unwrap_or("") {
@@ -755,17 +1193,84 @@ pub fn parse_stream_chunk(data: &str) -> Result<String, AdapterError> {
     let value: Value = serde_json::from_str(data)
         .map_err(|e| err("protocol_error", format!("invalid SSE JSON: {e}")))?;
 
-    let events = if value
-        .get("type")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .starts_with("response.")
-    {
+    let event_type = value.get("type").and_then(Value::as_str).unwrap_or("");
+    let events = if event_type.starts_with("response.") {
         parse_responses(&value)
+    } else if matches!(
+        event_type,
+        "message_start"
+            | "content_block_start"
+            | "content_block_delta"
+            | "message_delta"
+            | "message_stop"
+            | "error"
+    ) {
+        parse_anthropic(&value)?
     } else {
         parse_chat(&value)
     };
     Ok(Value::Array(events).to_string())
+}
+
+fn parse_anthropic_full(value: &Value) -> Result<Vec<Value>, AdapterError> {
+    let mut events = Vec::new();
+    if let Some(id) = value.get("id").and_then(Value::as_str) {
+        events.push(json!({"type":"start","upstream_request_id":id}));
+    }
+    let mut has_tool_calls = false;
+    if let Some(content) = value.get("content").and_then(Value::as_array) {
+        for (index, block) in content.iter().enumerate() {
+            match block.get("type").and_then(Value::as_str) {
+                Some("text") => {
+                    if let Some(text) = block.get("text").and_then(Value::as_str) {
+                        events.push(json!({"type":"text_delta","text":text}));
+                    }
+                }
+                Some("thinking") => {
+                    events.push(json!({
+                        "type":"thinking_delta",
+                        "text":block.get("thinking").and_then(Value::as_str).unwrap_or(""),
+                        "signature":block.get("signature").and_then(Value::as_str)
+                    }));
+                }
+                Some("tool_use") => {
+                    has_tool_calls = true;
+                    events.push(json!({
+                        "type":"tool_call_start",
+                        "index":index,
+                        "id":block.get("id").and_then(Value::as_str),
+                        "name":block.get("name").and_then(Value::as_str).unwrap_or(""),
+                        "signature":Value::Null
+                    }));
+                    events.push(json!({
+                        "type":"tool_call_args_delta",
+                        "index":index,
+                        "args":block.get("input").cloned().unwrap_or_else(|| json!({})).to_string()
+                    }));
+                }
+                _ => {}
+            }
+        }
+    }
+    if let Some(usage) = value.get("usage") {
+        events.push(json!({
+            "type":"usage",
+            "input":usage.get("input_tokens").and_then(Value::as_u64),
+            "output":usage.get("output_tokens").and_then(Value::as_u64),
+            "cached":usage.get("cache_read_input_tokens").and_then(Value::as_u64),
+            "cache_write":usage.get("cache_creation_input_tokens").and_then(Value::as_u64),
+            "thinking":usage.get("thinking_tokens").and_then(Value::as_u64)
+        }));
+    }
+    let reason = match value.get("stop_reason").and_then(Value::as_str) {
+        Some("tool_use") => "tool_calls",
+        Some("max_tokens") => "length",
+        Some("end_turn" | "stop_sequence") => "stop",
+        _ if has_tool_calls => "tool_calls",
+        _ => "stop",
+    };
+    events.push(json!({"type":"finish","reason":reason}));
+    Ok(events)
 }
 
 pub fn parse_full_response(body_json: &str) -> Result<String, AdapterError> {
@@ -774,6 +1279,10 @@ pub fn parse_full_response(body_json: &str) -> Result<String, AdapterError> {
 
     if value.get("object").and_then(Value::as_str) == Some("chat.completion") {
         return Ok(Value::Array(parse_chat(&value)).to_string());
+    }
+
+    if value.get("type").and_then(Value::as_str) == Some("message") {
+        return Ok(Value::Array(parse_anthropic_full(&value)?).to_string());
     }
 
     if value.get("object").and_then(Value::as_str) == Some("response")
@@ -850,6 +1359,58 @@ pub fn parse_full_response(body_json: &str) -> Result<String, AdapterError> {
 mod tests {
     use super::*;
 
+    fn test_model(id: &str, format: TransportFormat, endpoint: &str) -> String {
+        let mut capabilities = ModelCapabilitiesV3::default();
+        capabilities.transport = Some(ModelTransportCapability::at_endpoint(format, endpoint));
+        json!({
+            "upstream_id":id,
+            "capabilities_json":capabilities.to_json().unwrap()
+        })
+        .to_string()
+    }
+
+    fn chat_model(id: &str) -> String {
+        test_model(id, TransportFormat::OpenAiChat, "/zen/v1/chat/completions")
+    }
+
+    fn responses_model(id: &str) -> String {
+        test_model(id, TransportFormat::OpenAiResponses, "/zen/v1/responses")
+    }
+
+    fn anthropic_model(id: &str) -> String {
+        test_model(id, TransportFormat::Anthropic, "/zen/v1/messages")
+    }
+
+    fn production_model_row(id: &str, format: TransportFormat, endpoint: &str) -> String {
+        let mut capabilities = ModelCapabilitiesV3::default();
+        capabilities.transport = Some(ModelTransportCapability::at_endpoint(format, endpoint));
+        json!({
+            "id":"model_123",
+            "provider_id":"provider_123",
+            "upstream_id":id,
+            "display_name":id,
+            "enabled":1,
+            "context_window":null,
+            "max_output_tokens":null,
+            "capabilities":"{}",
+            "prices":"{}",
+            "parameters":"{}",
+            "thinking_map":"{}",
+            "extra_request":"{}",
+            "discovery":json!({
+                "latest_observation":{
+                    "raw_metadata":{
+                        "id":id,
+                        "kinetix_plugin_capabilities":capabilities
+                    }
+                }
+            }).to_string(),
+            "created_at":"2026-01-01T00:00:00Z",
+            "opaque_state_plugin":""
+        })
+        .to_string()
+    }
+
     fn chat_body(messages: Value) -> Result<Value, AdapterError> {
         let request = serde_json::json!({
             "requested_model": "mimo-v2.5-free",
@@ -858,11 +1419,7 @@ mod tests {
             "tools": [],
             "stream": true
         });
-        let body = build_body(
-            &request.to_string(),
-            "{}",
-            r#"{"upstream_id":"mimo-v2.5-free"}"#,
-        )?;
+        let body = build_body(&request.to_string(), "{}", &chat_model("mimo-v2.5-free"))?;
         Ok(serde_json::from_str(&body).expect("adapter body must be valid JSON"))
     }
 
@@ -877,24 +1434,165 @@ mod tests {
         let body = build_body(
             &request.to_string(),
             "{}",
-            r#"{"upstream_id":"mimo-v2.6-flash-free"}"#,
+            &chat_model("mimo-v2.6-flash-free"),
         )?;
         Ok(serde_json::from_str(&body).expect("adapter body must be valid JSON"))
     }
 
     #[test]
-    fn chooses_endpoint_by_model_family() {
+    fn uses_discovered_transport_metadata_for_endpoints() {
         let provider = r#"{"base_url":"https://opencode.ai"}"#;
-        assert!(build_url(provider, r#"{"upstream_id":"mimo-v2.5-free"}"#)
+        assert!(build_url(provider, &chat_model("mimo-v2.5-free"))
             .unwrap()
             .ends_with("/zen/v1/chat/completions"));
         assert!(build_url(
             provider,
-            r#"{"upstream_id":"muse-spark-1.3-contributor-free"}"#
+            &responses_model("muse-spark-1.3-contributor-free")
         )
         .unwrap()
         .ends_with("/zen/v1/responses"));
+        assert!(build_url(provider, &anthropic_model("union-alpha"))
+            .unwrap()
+            .ends_with("/zen/v1/messages"));
+
+        let selected = test_model("big-pickle", TransportFormat::Anthropic, "/custom/messages");
+        assert_eq!(
+            build_url(provider, &selected).unwrap(),
+            "https://opencode.ai/custom/messages"
+        );
     }
+
+    #[test]
+    fn production_model_row_uses_capabilities_from_discovery_json_string() {
+        let provider = r#"{"base_url":"https://opencode.ai"}"#;
+        assert!(build_url(
+            provider,
+            &production_model_row(
+                "union-alpha",
+                TransportFormat::Anthropic,
+                "/zen/v1/messages"
+            )
+        )
+        .unwrap()
+        .ends_with("/zen/v1/messages"));
+    }
+
+    #[test]
+    fn pre_v3_model_rows_keep_using_normalized_transport_metadata() {
+        let provider = r#"{"base_url":"https://opencode.ai"}"#;
+        for discovery in [
+            json!({"transport":{"format":"openai-chat"}}),
+            json!({"latest_observation":{"transport":{"format":"openai-chat"}}}),
+        ] {
+            let model = json!({
+                "id":"model_legacy",
+                "provider_id":"provider_opencode",
+                "upstream_id":"mimo-v2.5-free",
+                "capabilities":"{}",
+                "discovery":discovery.to_string(),
+            })
+            .to_string();
+            assert_eq!(
+                build_url(provider, &model).unwrap(),
+                "https://opencode.ai/zen/v1/chat/completions"
+            );
+        }
+    }
+
+    #[test]
+    fn core_persisted_model_capabilities_keep_v3_transport_endpoint() {
+        let provider = r#"{"base_url":"https://opencode.ai"}"#;
+        let model = json!({
+            "id":"model_v3",
+            "provider_id":"provider_opencode",
+            "upstream_id":"muse-spark",
+            "capabilities":"{}",
+            "discovery":json!({
+                "latest_observation": {
+                    "model_capabilities": {
+                        "schema_version": 3,
+                        "transport": {
+                            "format": "openai-responses",
+                            "endpoint": "/zen/v1/custom-responses",
+                            "alternatives": [{"format": "openai-chat"}]
+                        }
+                    }
+                }
+            })
+            .to_string(),
+        })
+        .to_string();
+
+        assert_eq!(
+            build_url(provider, &model).unwrap(),
+            "https://opencode.ai/zen/v1/custom-responses"
+        );
+    }
+
+    #[test]
+    fn unknown_models_without_transport_metadata_fail_conservatively() {
+        let error = build_url("{}", r#"{"upstream_id":"new-free-model"}"#).unwrap_err();
+        assert_eq!(error.code, "unsupported_transport");
+        assert!(error.message.contains("transport metadata"));
+    }
+
+    #[test]
+    fn anthropic_body_uses_messages_schema_and_preserves_tool_history() {
+        let request = json!({
+            "requested_model":"union-alpha",
+            "system":["follow rules", "be concise"],
+            "messages":[
+                {"role":"user","parts":[{"type":"text","text":"read this"}]},
+                {"role":"assistant","parts":[
+                    {"type":"tool_call","id":"call_1","name":"read","arguments":r#"{"path":"README.md"}"#}
+                ]},
+                {"role":"tool","parts":[
+                    {"type":"tool_result","tool_call_id":"call_1","name":"read","content":"contents","is_error":false}
+                ]}
+            ],
+            "tools":[{"name":"read","description":"Read a file","parameters":{"type":"object","properties":{"path":{"type":"string"}}}}],
+            "max_tokens":512
+        });
+        let body: Value = serde_json::from_str(
+            &build_body(&request.to_string(), "{}", &anthropic_model("union-alpha")).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(body["model"], "union-alpha");
+        assert_eq!(body["system"], "follow rules\nbe concise");
+        assert_eq!(body["max_tokens"], 512);
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["messages"][0]["role"], "user");
+        assert_eq!(body["messages"][1]["content"][0]["type"], "tool_use");
+        assert_eq!(
+            body["messages"][1]["content"][0]["input"]["path"],
+            "README.md"
+        );
+        assert_eq!(body["messages"][2]["content"][0]["tool_use_id"], "call_1");
+        assert!(body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == "bash"));
+        assert!(body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == "read"));
+        assert!(body["tools"][0].get("function").is_none());
+    }
+
+    #[test]
+    fn anthropic_body_rejects_unsupported_image_input() {
+        let request = json!({
+            "requested_model":"union-alpha",
+            "messages":[{"role":"user","parts":[{"type":"image","data":"..."}]}]
+        });
+        let error =
+            build_body(&request.to_string(), "{}", &anthropic_model("union-alpha")).unwrap_err();
+        assert_eq!(error.code, "unsupported_capability");
+    }
+
     #[test]
     fn chat_body_injects_required_free_tier_tools() {
         let req = r#"{
@@ -904,10 +1602,9 @@ mod tests {
             "tools":[],
             "stream":true
         }"#;
-        let out: Value = serde_json::from_str(
-            &build_body(req, "{}", r#"{"upstream_id":"mimo-v2.5-free"}"#).unwrap(),
-        )
-        .unwrap();
+        let out: Value =
+            serde_json::from_str(&build_body(req, "{}", &chat_model("mimo-v2.5-free")).unwrap())
+                .unwrap();
         let names: Vec<&str> = out["tools"]
             .as_array()
             .unwrap()
@@ -932,7 +1629,7 @@ mod tests {
         let body = build_body(
             &request.to_string(),
             "{}",
-            r#"{"upstream_id":"mimo-v2.6-flash-free"}"#,
+            &chat_model("mimo-v2.6-flash-free"),
         )
         .unwrap();
         let out: Value = serde_json::from_str(&body).unwrap();
@@ -953,7 +1650,7 @@ mod tests {
         let body = build_body(
             &request.to_string(),
             "{}",
-            r#"{"upstream_id":"muse-spark-1.3-contributor-free"}"#,
+            &responses_model("muse-spark-1.3-contributor-free"),
         )
         .unwrap();
         let out: Value = serde_json::from_str(&body).unwrap();
@@ -972,12 +1669,7 @@ mod tests {
             "stream": true,
             "thinking": {"level": "high"}
         });
-        let body = build_body(
-            &request.to_string(),
-            "{}",
-            r#"{"upstream_id":"mimo-v2.5-free"}"#,
-        )
-        .unwrap();
+        let body = build_body(&request.to_string(), "{}", &chat_model("mimo-v2.5-free")).unwrap();
         let out: Value = serde_json::from_str(&body).unwrap();
         assert!(out.get("thinking").is_none());
         assert!(out.get("reasoning_effort").is_none());
@@ -1179,7 +1871,7 @@ mod tests {
             &build_body(
                 &request.to_string(),
                 "{}",
-                r#"{"upstream_id":"muse-spark-1.3-contributor-free"}"#,
+                &responses_model("muse-spark-1.3-contributor-free"),
             )
             .unwrap(),
         )
@@ -1424,6 +2116,85 @@ mod tests {
     }
 
     #[test]
+    fn parses_anthropic_messages_stream_events() {
+        let start: Value = serde_json::from_str(
+            &parse_stream_chunk(
+                r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":12,"output_tokens":0}}}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(start[0]["type"], "start");
+        assert_eq!(start[0]["upstream_request_id"], "msg_1");
+        assert_eq!(start[1]["input"], 12);
+
+        let tool_start: Value = serde_json::from_str(
+            &parse_stream_chunk(
+                r#"{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_1","name":"read","input":{}}}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(tool_start[0]["type"], "tool_call_start");
+        assert_eq!(tool_start[0]["index"], 2);
+        assert_eq!(tool_start[0]["id"], "toolu_1");
+
+        let tool_args: Value = serde_json::from_str(
+            &parse_stream_chunk(
+                r#"{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"README.md\"}"}}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(tool_args[0]["type"], "tool_call_args_delta");
+        assert_eq!(tool_args[0]["args"], r#"{"path":"README.md"}"#);
+
+        let thinking: Value = serde_json::from_str(
+            &parse_stream_chunk(
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"checking"}}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(thinking[0]["type"], "thinking_delta");
+        assert_eq!(thinking[0]["text"], "checking");
+
+        let signature: Value = serde_json::from_str(
+            &parse_stream_chunk(
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig_1"}}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(signature[0]["signature"], "sig_1");
+
+        let finish: Value = serde_json::from_str(
+            &parse_stream_chunk(
+                r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":7}}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(finish[0]["output"], 7);
+        assert_eq!(finish[1]["reason"], "tool_calls");
+    }
+
+    #[test]
+    fn parses_full_anthropic_message_response() {
+        let events: Value = serde_json::from_str(
+            &parse_full_response(
+                r#"{"type":"message","id":"msg_2","stop_reason":"end_turn","content":[{"type":"text","text":"hello"}],"usage":{"input_tokens":3,"output_tokens":1}}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(events[0]["type"], "start");
+        assert_eq!(events[1]["text"], "hello");
+        assert_eq!(events[2]["input"], 3);
+        assert_eq!(events[3]["reason"], "stop");
+    }
+
+    #[test]
     fn apply_auth_omits_session_when_unavailable_and_never_uses_credential_as_identity() {
         let headers: Vec<(String, String)> =
             serde_json::from_str(&apply_auth("{}", "ses_secret-value", None).unwrap()).unwrap();
@@ -1432,6 +2203,11 @@ mod tests {
         assert_eq!(
             map.get("Authorization").map(String::as_str),
             Some("Bearer public")
+        );
+        assert_eq!(map.get("x-api-key").map(String::as_str), Some("public"));
+        assert_eq!(
+            map.get("anthropic-version").map(String::as_str),
+            Some("2023-06-01")
         );
         assert_eq!(
             map.get("x-opencode-client").map(String::as_str),
