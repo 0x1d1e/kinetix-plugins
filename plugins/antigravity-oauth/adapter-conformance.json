@@ -16,6 +16,7 @@
         "tool_calls": "supported",
         "parallel_tool_calls": "supported",
         "tool_result_continuation": "supported",
+        "tool_result_errors": "supported",
         "image_input": "supported",
         "reasoning_controls": "supported",
         "reasoning_output": "supported",

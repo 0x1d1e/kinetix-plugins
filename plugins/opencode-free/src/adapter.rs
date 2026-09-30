@@ -865,6 +865,7 @@ pub fn build_body(
     let model: Value = serde_json::from_str(model_json)
         .map_err(|e| err("bad_request", format!("bad model json: {e}")))?;
     let transport = model_transport(&model)?;
+    validate_tool_result_error_support(&req, &transport.format)?;
     let body = match transport.format {
         TransportFormat::OpenAiChat => build_chat_body(&req, &model)?,
         TransportFormat::OpenAiResponses => build_responses_body(&req, &model),
@@ -878,6 +879,39 @@ pub fn build_body(
     };
 
     Ok(body.to_string())
+}
+
+fn validate_tool_result_error_support(
+    req: &Value,
+    format: &TransportFormat,
+) -> Result<(), AdapterError> {
+    if matches!(format, TransportFormat::Anthropic) {
+        return Ok(());
+    }
+
+    let has_failed_tool_result = req
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .flat_map(|message| {
+            message
+                .get("parts")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+        .any(|part| {
+            part.get("type").and_then(Value::as_str) == Some("tool_result")
+                && part.get("is_error").and_then(Value::as_bool) == Some(true)
+        });
+    if has_failed_tool_result {
+        return Err(err(
+            "unsupported_capability",
+            "OpenCode OpenAI transports do not support failed tool results",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_supported_request_features(req: &Value) -> Result<(), AdapterError> {

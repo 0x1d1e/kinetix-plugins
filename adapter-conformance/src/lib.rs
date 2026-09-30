@@ -22,6 +22,8 @@ const REQUEST_PARALLEL_TOOLS: &str =
     include_str!("../../wit/fixtures/plugin-adapter/v1/requests/parallel-tools.json");
 const REQUEST_TOOL_CONTINUATION: &str =
     include_str!("../../wit/fixtures/plugin-adapter/v1/requests/tool-result-continuation.json");
+const REQUEST_TOOL_ERROR: &str =
+    include_str!("../../wit/fixtures/plugin-adapter/v1/requests/tool-result-error.json");
 const REQUEST_SCHEMA: &str =
     include_str!("../../wit/fixtures/plugin-adapter/v1/requests/structured-schema.json");
 const REQUEST_SCHEMA_MAX_LENGTH: &str =
@@ -43,6 +45,7 @@ const REQUIRED_CAPABILITIES: &[&str] = &[
     "tool_calls",
     "parallel_tool_calls",
     "tool_result_continuation",
+    "tool_result_errors",
     "image_input",
     "reasoning_controls",
     "reasoning_output",
@@ -162,14 +165,8 @@ pub fn check(adapter: &impl Adapter, profile_json: &str) -> Result<(), String> {
             REQUEST_PARALLEL_TOOLS,
             &["get_weather", "read_file", "Paris", "src/main.rs"],
         )?;
-        check_request_feature(
-            adapter,
-            &context,
-            transport,
-            "tool_result_continuation",
-            REQUEST_TOOL_CONTINUATION,
-            &["read_file", "fn main() {}"],
-        )?;
+        check_tool_result_continuation(adapter, &context, transport)?;
+        check_tool_result_errors(adapter, &context, transport)?;
         check_request_feature(
             adapter,
             &context,
@@ -230,7 +227,11 @@ fn validate_capabilities(adapter: &str, transport: &TransportProfile) -> Result<
             unknown.join(", ")
         ));
     }
-    for dependent in ["parallel_tool_calls", "tool_result_continuation"] {
+    for dependent in [
+        "parallel_tool_calls",
+        "tool_result_continuation",
+        "tool_result_errors",
+    ] {
         if transport.capabilities[dependent] == CapabilityStatus::Supported
             && transport.capabilities["tool_calls"] != CapabilityStatus::Supported
         {
@@ -239,6 +240,14 @@ fn validate_capabilities(adapter: &str, transport: &TransportProfile) -> Result<
                 transport.format
             ));
         }
+    }
+    if transport.capabilities["tool_result_errors"] == CapabilityStatus::Supported
+        && transport.capabilities["tool_result_continuation"] != CapabilityStatus::Supported
+    {
+        return Err(format!(
+            "{adapter} / {} declares tool_result_errors supported without tool_result_continuation",
+            transport.format
+        ));
     }
     if transport.capabilities["schema_max_length"] == CapabilityStatus::Supported
         && transport.capabilities["structured_schemas"] != CapabilityStatus::Supported
@@ -357,6 +366,138 @@ fn expect_unsupported<T>(
     }
 }
 
+fn check_tool_result_continuation(
+    adapter: &impl Adapter,
+    context: &str,
+    transport: &TransportProfile,
+) -> Result<(), String> {
+    let request = parse_fixture(REQUEST_TOOL_CONTINUATION);
+    match transport.capabilities["tool_result_continuation"] {
+        CapabilityStatus::Supported => {
+            let body = adapter
+                .build_body(&request, &transport.provider, &transport.model)
+                .map_err(|error| {
+                    format!(
+                        "{context} declares tool_result_continuation supported but rejected it: {error}"
+                    )
+                })?;
+            let preserved = match transport.format.as_str() {
+                "antigravity" => {
+                    body.pointer("/request/contents/1/parts/0/functionResponse/response/result")
+                        .and_then(Value::as_str)
+                        == Some("fn main() {}")
+                        && body
+                            .pointer("/request/contents/1/parts/0/functionResponse/response/error")
+                            .is_none()
+                        && body.pointer("/request/contents/1/parts/0/functionResponse/id")
+                            == Some(&json!("call_read"))
+                }
+                "anthropic" => {
+                    body.pointer("/messages/1/content/0/content")
+                        .and_then(Value::as_str)
+                        == Some("fn main() {}")
+                        && body.pointer("/messages/1/content/0/tool_use_id")
+                            == Some(&json!("call_read"))
+                        && body.pointer("/messages/1/content/0/is_error") != Some(&json!(true))
+                }
+                "openai-chat" => {
+                    body.pointer("/messages/1/content").and_then(Value::as_str)
+                        == Some("fn main() {}")
+                        && body.pointer("/messages/1/tool_call_id") == Some(&json!("call_read"))
+                }
+                "openai-responses" => body
+                    .get("input")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .any(|item| {
+                        item.get("type").and_then(Value::as_str) == Some("function_call_output")
+                            && item.get("call_id") == Some(&json!("call_read"))
+                            && item.get("output").and_then(Value::as_str) == Some("fn main() {}")
+                    }),
+                format => {
+                    return Err(format!(
+                        "{context} has no tool-result continuation assertion for transport '{format}'"
+                    ));
+                }
+            };
+            if !preserved {
+                return Err(format!(
+                    "{context} lost successful tool-result continuation: {body}"
+                ));
+            }
+            Ok(())
+        }
+        CapabilityStatus::Unsupported => expect_unsupported(
+            context,
+            "tool_result_continuation",
+            adapter.build_body(&request, &transport.provider, &transport.model),
+        ),
+        CapabilityStatus::NotApplicable => Ok(()),
+    }
+}
+
+fn check_tool_result_errors(
+    adapter: &impl Adapter,
+    context: &str,
+    transport: &TransportProfile,
+) -> Result<(), String> {
+    let request = parse_fixture(REQUEST_TOOL_ERROR);
+    match transport.capabilities["tool_result_errors"] {
+        CapabilityStatus::Supported => {
+            let body = adapter
+                .build_body(&request, &transport.provider, &transport.model)
+                .map_err(|error| {
+                    format!(
+                        "{context} declares tool_result_errors supported but rejected it: {error}"
+                    )
+                })?;
+            let error_content = request
+                .pointer("/messages/1/parts/0/content")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "tool-result error fixture lacks content".to_string())?;
+            let preserved = match transport.format.as_str() {
+                "antigravity" => {
+                    body.pointer("/request/contents/1/parts/0/functionResponse/response/error")
+                        .and_then(Value::as_str)
+                        == Some(error_content)
+                        && body
+                            .pointer("/request/contents/1/parts/0/functionResponse/response/result")
+                            .is_none()
+                        && body.pointer("/request/contents/1/parts/0/functionResponse/id")
+                            == Some(&json!("call_read"))
+                }
+                "anthropic" => {
+                    body.pointer("/messages/1/content/0/is_error") == Some(&json!(true))
+                        && body
+                            .pointer("/messages/1/content/0/content")
+                            .and_then(Value::as_str)
+                            == Some(error_content)
+                        && body.pointer("/messages/1/content/0/tool_use_id")
+                            == Some(&json!("call_read"))
+                }
+                format => {
+                    return Err(format!(
+                        "{context} has no tool-result error assertion for transport '{format}'"
+                    ));
+                }
+            };
+            if !preserved {
+                return Err(format!(
+                    "{context} silently lost failed-tool semantics for '{error_content}': {body}"
+                ));
+            }
+            Ok(())
+        }
+        CapabilityStatus::Unsupported => expect_unsupported(
+            context,
+            "tool_result_errors",
+            adapter.build_body(&request, &transport.provider, &transport.model),
+        ),
+        CapabilityStatus::NotApplicable => Ok(()),
+    }
+}
+
 fn check_malformed_tool_arguments(
     adapter: &impl Adapter,
     context: &str,
@@ -458,6 +599,17 @@ fn check_expected_response_fixture(
             "{context} response fixture reasoning differs from the canonical response fixture"
         ));
     }
+    if let Some(signature) = expected.get("thinking_signature").and_then(Value::as_str) {
+        let canonical_signature = canonical_events
+            .iter()
+            .find(|event| event["type"] == "thinking_delta" && event["text"] == canonical_thinking)
+            .and_then(|event| event["signature"].as_str());
+        if canonical_signature != Some(signature) {
+            return Err(format!(
+                "{context} response fixture reasoning signature differs from the canonical response fixture"
+            ));
+        }
+    }
 
     let canonical_calls: Vec<_> = canonical_events
         .iter()
@@ -491,6 +643,13 @@ fn check_expected_response_fixture(
             return Err(format!(
                 "{context} response fixture arguments for '{name}' differ from the canonical response"
             ));
+        }
+        if let Some(signature) = expected_call.get("signature").and_then(Value::as_str) {
+            if canonical_call["signature"].as_str() != Some(signature) {
+                return Err(format!(
+                    "{context} response fixture signature for '{name}' differs from the canonical response"
+                ));
+            }
         }
     }
 
@@ -613,13 +772,27 @@ fn assert_expected_events(
             continue;
         }
         let value = expected[field].as_str().unwrap();
-        if !events
+        let content_event = events
             .iter()
-            .any(|event| event_type(&event, event_kind) && event["text"].as_str() == Some(value))
-        {
+            .find(|event| event_type(&event, event_kind) && event["text"].as_str() == Some(value));
+        let Some(content_event) = content_event else {
             return Err(format!(
                 "{context} response lost {feature} content '{value}'"
             ));
+        };
+        if feature == "reasoning" {
+            if let Some(signature) = expected.get("thinking_signature").and_then(Value::as_str) {
+                if content_event["signature"].as_str() != Some(signature)
+                    && !events.iter().any(|event| {
+                        event_type(&event, event_kind)
+                            && event["signature"].as_str() == Some(signature)
+                    })
+                {
+                    return Err(format!(
+                        "{context} response lost reasoning signature '{signature}'"
+                    ));
+                }
+            }
         }
     }
 
@@ -647,6 +820,13 @@ fn assert_expected_events(
                 if start["id"].as_str() != Some(id) {
                     return Err(format!(
                         "{context} response changed tool call id for '{name}'"
+                    ));
+                }
+            }
+            if let Some(signature) = call.get("signature").and_then(Value::as_str) {
+                if start["signature"].as_str() != Some(signature) {
+                    return Err(format!(
+                        "{context} response lost tool call signature for '{name}'"
                     ));
                 }
             }
@@ -799,6 +979,7 @@ mod tests {
             "tool_calls",
             "parallel_tool_calls",
             "tool_result_continuation",
+            "tool_result_errors",
             "image_input",
             "reasoning_controls",
             "reasoning_output",

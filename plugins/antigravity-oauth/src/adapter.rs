@@ -1110,9 +1110,14 @@ fn part_to_gemini(p: &Value) -> Option<Value> {
         "tool_result" => {
             let name = sanitize_function_name(p.get("name").and_then(|n| n.as_str()).unwrap_or(""));
             let content = p.get("content").and_then(|c| c.as_str()).unwrap_or("");
+            let response = if p.get("is_error").and_then(Value::as_bool) == Some(true) {
+                json!({ "error": content })
+            } else {
+                json!({ "result": content })
+            };
             let mut function_response = json!({
                 "name": name,
-                "response": { "result": content }
+                "response": response
             });
             if let Some(id) = p.get("tool_call_id").and_then(Value::as_str) {
                 function_response["id"] = json!(id);
