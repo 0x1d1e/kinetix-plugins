@@ -27,6 +27,8 @@ interface provider-adapter {
     credential: string,
     session: option<session-context>
   ) -> result<string, plugin-error>;
+  /// `provider-json` includes reserved `_kinetix` values injected by core, such as
+  /// the selected account ID, a non-secret project ID when available, and host time.
   build-body: func(
     request-json: string,
     provider-json: string,

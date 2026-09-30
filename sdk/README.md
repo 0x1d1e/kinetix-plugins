@@ -19,13 +19,13 @@ The ABI is the WIT interface, not this crate.
 
 Plugins implement provider mechanisms: authorization steps, credential resolution, discovery, health observations, request/response translation, and deterministic routing facts. They report results; they do not choose accounts, models, or runtime targets.
 
-Kinetix core owns scheduling, observation and credential persistence, health interpretation, retry/fallback, concurrency, cache affinity, and target selection. `host-storage` holds plugin-private state; core persists account health, model inventory, and credentials. `health-observation` and `quota-snapshot` are evidence, and `routing-fact` informs core policy without selecting a target. Adapter inputs describe the provider/model already selected by core.
+Kinetix core owns scheduling, observation and credential persistence, health interpretation, retry/fallback, concurrency, cache affinity, and target selection. `host-storage` holds plugin-private state; core persists account health, model inventory, and credentials. `health-observation` and `quota-snapshot` are evidence, and `routing-fact` informs core policy without selecting a target. Adapter inputs describe the provider/model already selected by core. API v2 adapters have no host imports; core supplies reserved `_kinetix` context in `provider-json` (account ID, host time, and a non-secret project ID when available) rather than letting adapters read storage or a clock.
 
-`sdk/tests/policy_boundary.rs` guards the WIT operation and evidence-field surface against new policy operations. Provider conformance tests live in `adapter-conformance/`.
+`sdk/tests/policy_boundary.rs` guards the WIT operation and evidence-field surface against new policy operations. `scripts/test_adapter_component_runtime.sh` invokes the compiled Antigravity v2 adapter with every host import set to trap. Provider conformance tests live in `adapter-conformance/`.
 
 ## Session-aware adapter API v2
 
-Keep existing plugins on `plugin_api = "1"` and the `adapter` bindings. Plugins that need opaque session context must use `kinetix_plugin_sdk::adapter_v2` (`plugin-adapter-v2` in `kinetix:plugin@2.0.0`) and declare `plugin_api = "2"`. API v1 WIT and adapter exports remain unchanged; the v2 world reuses v1 host capabilities and plugin types. Hosts can support both adapter worlds concurrently, while v1-only hosts reject API v2 plugins.
+Keep existing plugins on `plugin_api = "1"` and the `adapter` bindings. Plugins that need opaque session context must use `kinetix_plugin_sdk::adapter_v2` (`plugin-adapter-v2` in `kinetix:plugin@2.0.0`) and declare `plugin_api = "2"`. API v1 WIT and adapter exports remain unchanged; v2 adds session context but imports no host capabilities. Hosts can support both adapter worlds concurrently, while v1-only hosts reject API v2 plugins.
 
 ## Capability metadata
 

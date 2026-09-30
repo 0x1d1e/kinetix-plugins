@@ -113,6 +113,50 @@ class ManifestValidationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_manifest(self.path, changed)
 
+    def test_rejects_invalid_semver_and_accepts_valid_prerelease(self):
+        for version in (
+            "1.0.0-01",
+            "01.0.0",
+            "1.0.0-",
+            "1.0.0+build..2",
+            "18446744073709551616.0.0",
+        ):
+            changed = manifest()
+            changed["version"] = version
+            with self.subTest(version=version), self.assertRaises(ValueError):
+                validate_manifest(self.path, changed)
+
+        changed = manifest()
+        changed["version"] = "1.0.0-rc.1+build.7"
+        self.assertEqual(validate_manifest(self.path, changed), "dev.kinetix.test")
+
+    def test_pricing_scope_matches_host_enum(self):
+        for pricing_scope in ("integration", "direct_api"):
+            changed = manifest()
+            changed["integrations"][0]["provider"] = {
+                "base_url": "https://provider.invalid",
+                "wire_format": "openai",
+                "auth_scheme": "bearer",
+                "timeout_ms": 1000,
+                "capability_mode": "permissive",
+                "follow_redirects": False,
+                "pricing_scope": pricing_scope,
+            }
+            self.assertEqual(validate_manifest(self.path, changed), "dev.kinetix.test")
+
+        changed = manifest()
+        changed["integrations"][0]["provider"] = {
+            "base_url": "https://provider.invalid",
+            "wire_format": "openai",
+            "auth_scheme": "bearer",
+            "timeout_ms": 1000,
+            "capability_mode": "permissive",
+            "follow_redirects": False,
+            "pricing_scope": "whatever",
+        }
+        with self.assertRaises(ValueError):
+            validate_manifest(self.path, changed)
+
     def test_host_compatibility_remains_host_owned(self):
         changed = manifest()
         changed["plugin_api"] = "99"

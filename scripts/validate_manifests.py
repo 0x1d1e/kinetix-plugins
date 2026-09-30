@@ -23,6 +23,25 @@ def require(condition: bool, path: pathlib.Path, message: str) -> None:
         raise ValueError(f"{path}: {message}")
 
 
+def validate_semver_component_bounds(path: pathlib.Path, data: dict) -> None:
+    versions = [("version", data["version"])]
+    compatibility = data.get("compatibility", {})
+    versions.extend(
+        (f"compatibility.{key}", value)
+        for key, value in compatibility.items()
+        if value is not None
+    )
+    for label, version in versions:
+        core = version.split("+", 1)[0].split("-", 1)[0]
+        for component in core.split("."):
+            require(
+                len(component) < 20
+                or (len(component) == 20 and component <= "18446744073709551615"),
+                path,
+                f"{label} component exceeds the host SemVer u64 range",
+            )
+
+
 def validate_manifest(path: pathlib.Path, data: object) -> str:
     errors = sorted(VALIDATOR.iter_errors(data), key=lambda error: list(map(str, error.absolute_path)))
     if errors:
@@ -31,6 +50,7 @@ def validate_manifest(path: pathlib.Path, data: object) -> str:
         raise ValueError(f"{path}: {location}: {error.message}")
 
     assert isinstance(data, dict)
+    validate_semver_component_bounds(path, data)
     plugin_id = data["id"]
     require(
         re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,126}[a-z0-9]|[a-z0-9]", plugin_id) is not None,

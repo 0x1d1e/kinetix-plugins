@@ -6,7 +6,8 @@
 #   3. validate response contract fixtures (wit/fixtures/plugin-response/v1)
 #   4. cargo check --locked --workspace --target wasm32-unknown-unknown
 #   5. validate catalog.json / trusted-publishers.json
-#   6. validate plugins/*/plugin.toml manifests
+#   6. runtime-check the compiled Antigravity v2 adapter component with host imports trapped
+#   7. validate plugins/*/plugin.toml manifests
 set -uo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -100,6 +101,7 @@ run_step "Check formatting" cargo fmt --all -- --check || overall=1
 run_step "Run plugin unit tests" cargo test --workspace || overall=1
 run_step "Validate response contract fixtures" validate_response_contract || overall=1
 run_step "Check plugin workspace" cargo check --locked --workspace --target wasm32-unknown-unknown || overall=1
+run_step "Test compiled adapter runtime boundary" scripts/test_adapter_component_runtime.sh || overall=1
 run_step "Validate catalog JSON" validate_json || overall=1
 run_step "Validate plugin metadata and package contract" validate_plugin_metadata || overall=1
 

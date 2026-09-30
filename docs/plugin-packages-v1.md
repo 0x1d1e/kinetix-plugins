@@ -4,7 +4,7 @@ This repository defines plugin metadata and `.kxp` packaging. Kinetix owns insta
 
 ## Manifest and identity
 
-[`schemas/plugin-manifest-v1.schema.json`](../schemas/plugin-manifest-v1.schema.json) is the canonical schema for parsed `plugin.toml`. Unknown manifest fields are invalid. `id` and `version` define package identity; catalog names and descriptions are display metadata and cannot replace them. `plugin_api` names the ABI major as a decimal string. Compatibility fields are claims for the host to evaluate; a missing bound makes no compatibility claim. Resource limits and permissions are requests, not grants.
+[`schemas/plugin-manifest-v1.schema.json`](../schemas/plugin-manifest-v1.schema.json) is the canonical schema for parsed `plugin.toml`. Unknown manifest fields are invalid. Versions use strict SemVer 2.0.0 syntax and the host parser's unsigned 64-bit bounds; provider `pricing_scope` is `integration` or `direct_api`. `id` and `version` define package identity; catalog names and descriptions are display metadata and cannot replace them. `plugin_api` names the ABI major as a decimal string. Compatibility fields are claims for the host to evaluate; a missing bound makes no compatibility claim. Resource limits and permissions are requests, not grants.
 
 A release artifact is named `<id>-<version>.kxp`. The catalog's `id`, `latest_version`, and `artifact_name` must match the manifest identity. The host must report a mismatch rather than silently installing under the catalog's identity.
 
@@ -18,7 +18,9 @@ The package SHA-256 is over the complete `.kxp` byte stream. Catalog distributio
 
 ## Signatures and publisher identity
 
-`signature.ed25519` contains either 64 raw Ed25519 signature bytes or their Base64 encoding. The signed message is the 32-byte SHA-256 digest of `plugin.wasm` bytes followed by the exact UTF-8 bytes of `plugin.toml`. The signature does not cover README, LICENSE, provenance, or TAR headers. The build script emits raw signature bytes.
+`signature.ed25519` contains either 64 raw Ed25519 signature bytes or their Base64 encoding. Compute `message = SHA256(plugin.wasm bytes || exact plugin.toml bytes)`, then Ed25519-sign those 32 digest bytes. `plugin.toml` is signed byte-for-byte as stored, including whitespace and final newline. The signature does not cover README, LICENSE, provenance, or TAR headers. The build script emits raw signature bytes.
+
+The byte-level vector in [`signing-vector.json`](../wit/fixtures/kxp/v1/signing-vector.json) uses `plugin.wasm = 0061736d01000000` and `plugin.toml = 6964203d2022766563746f72220a` (ASCII `id = "vector"\n`). Their concatenation hashes to `f6734886c3524bc247578c9ba8d916d12be739717790f2d8ed57ac2c7a98a842`. The vector also records a raw Ed25519 public key and signature; its test-only key is not trusted for releases.
 
 Publisher keys live in [`trusted-publishers.json`](../trusted-publishers.json), validated against [`schemas/trusted-publishers-v1.schema.json`](../schemas/trusted-publishers-v1.schema.json). Each record names an Ed25519 key and its publisher label. The catalog selects a `publisher_key_id`; its publisher label must match the selected key record. A signature verifies only when it matches an enabled trusted key. Missing signatures are unsigned; well-formed signatures that do not verify against a trusted key are untrusted. The host decides whether an unsigned or untrusted package may be installed.
 
@@ -32,7 +34,7 @@ The manifest schema rejects unknown fields. Missing optional compatibility or ca
 
 ## Fixtures and checks
 
-[`wit/fixtures/kxp/v1/`](../wit/fixtures/kxp/v1/) covers valid, malformed, incompatible, unsigned, identity-mismatched, and tampered cases. The valid, incompatible, and tampered signatures use a fixture-only publisher key; its private key is not committed. The tests verify the signatures against the public key and confirm the tampered manifest no longer verifies.
+[`wit/fixtures/kxp/v1/`](../wit/fixtures/kxp/v1/) covers valid, malformed, incompatible, unsigned, identity-mismatched, and tampered cases plus the signing vector. The valid, incompatible, and tampered signatures use a fixture-only publisher key; its private key is not committed. Tests verify the signatures, reject host-invalid SemVer and pricing scopes, and confirm the tampered manifest no longer verifies.
 
 Run package, manifest, and catalog checks with:
 
@@ -40,6 +42,7 @@ Run package, manifest, and catalog checks with:
 python3 scripts/test_validate_manifests.py
 python3 scripts/validate_manifests.py
 python3 scripts/test_validate_packages.py
+scripts/test_adapter_component_runtime.sh
 python3 scripts/test_validate_catalog.py
 python3 scripts/validate_catalog.py
 ```

@@ -24,7 +24,8 @@
   "$defs": {
     "semver": {
       "type": "string",
-      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$"
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$",
+      "description": "SemVer 2.0.0 version string. The validators also enforce the host parser's u64 bounds for major, minor, and patch."
     },
     "stringList": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
     "compatibility": {
@@ -111,7 +112,7 @@
         "models_path": { "type": "string", "pattern": "^/" },
         "follow_redirects": { "type": "boolean" },
         "credential_hosts": { "$ref": "#/$defs/stringList" },
-        "pricing_scope": { "type": "string" }
+        "pricing_scope": { "enum": ["integration", "direct_api"] }
       }
     },
     "ui": {

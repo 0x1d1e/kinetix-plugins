@@ -122,6 +122,17 @@ class PackageContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "SHA-256"):
             validate_package(self.package, expected_sha256=expected)
 
+    def test_rejects_host_invalid_semver_and_pricing_scope(self):
+        bad_semver = MANIFEST.replace(b'version = "1.0.0"', b'version = "1.0.0-01"')
+        make_archive(self.package, manifest=bad_semver)
+        with self.assertRaisesRegex(ValueError, "plugin.toml"):
+            validate_package(self.package)
+
+        bad_pricing_scope = MANIFEST + b'''\n[[integrations]]\nid = "fixture"\nname = "Fixture integration"\ndescription = "Fixture integration"\nmodel_source = "fixture-models"\n\n[integrations.provider]\nbase_url = "https://provider.invalid"\nwire_format = "openai"\nauth_scheme = "bearer"\ntimeout_ms = 1000\ncapability_mode = "permissive"\nfollow_redirects = false\npricing_scope = "whatever"\n'''
+        make_archive(self.package, manifest=bad_pricing_scope)
+        with self.assertRaisesRegex(ValueError, "plugin.toml"):
+            validate_package(self.package)
+
     def test_rejects_malformed_manifest_signature_length_and_identity(self):
         for kwargs, message in (
             ({"manifest": MANIFEST + b"id = 'duplicate'\n"}, "plugin.toml"),
@@ -193,6 +204,38 @@ class PackageContractTests(unittest.TestCase):
                 (FIXTURES / "valid/plugin.toml").read_bytes(),
                 (FIXTURES / "tampered/plugin.toml").read_bytes(),
             )
+
+    @unittest.skipUnless(shutil.which("openssl"), "openssl is required to verify signing vectors")
+    def test_documented_byte_level_signing_vector(self):
+        vector = json.loads((FIXTURES / "signing-vector.json").read_text(encoding="utf-8"))
+        wasm = bytes.fromhex(vector["plugin_wasm_hex"])
+        manifest = bytes.fromhex(vector["plugin_toml_hex"])
+        digest = hashlib.sha256(wasm + manifest).digest()
+        self.assertEqual(digest.hex(), vector["message_sha256_hex"])
+
+        public_key_der = bytes.fromhex("302a300506032b6570032100" + vector["public_key_ed25519_raw_hex"])
+        signature = bytes.fromhex(vector["signature_ed25519_hex"])
+        with (
+            tempfile.NamedTemporaryFile() as public_key_file,
+            tempfile.NamedTemporaryFile() as digest_file,
+            tempfile.NamedTemporaryFile() as signature_file,
+        ):
+            public_key_file.write(public_key_der)
+            public_key_file.flush()
+            digest_file.write(digest)
+            digest_file.flush()
+            signature_file.write(signature)
+            signature_file.flush()
+            result = subprocess.run(
+                [
+                    "openssl", "pkeyutl", "-verify", "-rawin", "-pubin", "-keyform", "DER",
+                    "-inkey", public_key_file.name, "-in", digest_file.name,
+                    "-sigfile", signature_file.name,
+                ],
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
 
     @unittest.skipUnless(shutil.which("openssl"), "openssl is required to verify fixture signatures")
     def test_fixture_signatures_cover_wasm_and_manifest(self):

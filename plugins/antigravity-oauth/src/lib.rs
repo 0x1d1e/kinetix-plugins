@@ -2090,7 +2090,6 @@ impl exports::hooks::Guest for Component {
 // authorization, and discovery exports remain API v1.
 
 use adapter_world::exports::kinetix::plugin2_0_0::provider_adapter::Guest as ProviderAdapterGuest;
-use kinetix::plugin::host_storage;
 use kinetix_plugin_sdk::adapter_v2 as adapter_world;
 
 type AdapterPluginError = adapter_world::kinetix::plugin1_0_0::types::PluginError;
@@ -2105,39 +2104,6 @@ fn adapter_err(e: crate::adapter::AdapterError) -> AdapterPluginError {
         retry_after: None,
         reset_at: None,
     }
-}
-
-fn provider_with_account_project(provider_json: &str) -> String {
-    let mut provider: serde_json::Value =
-        serde_json::from_str(provider_json).unwrap_or_else(|_| serde_json::json!({}));
-    let provider_id = provider
-        .get("id")
-        .and_then(|value| value.as_str())
-        .map(str::to_string);
-    let account_id = provider
-        .pointer("/_kinetix/account_id")
-        .and_then(|value| value.as_str())
-        .map(str::to_string);
-
-    if let (Some(provider_id), Some(account_id)) = (provider_id, account_id) {
-        let key = project_state_key(&provider_id, &account_id);
-        if let Some(bytes) = host_storage::get(&key) {
-            if let Ok(project_id) = String::from_utf8(bytes) {
-                let project_id = project_id.trim();
-                if !project_id.is_empty() {
-                    if !provider
-                        .get("_kinetix")
-                        .is_some_and(serde_json::Value::is_object)
-                    {
-                        provider["_kinetix"] = serde_json::json!({});
-                    }
-                    provider["_kinetix"]["project_id"] = serde_json::json!(project_id);
-                }
-            }
-        }
-    }
-
-    provider.to_string()
 }
 
 impl ProviderAdapterGuest for Component {
@@ -2160,7 +2126,6 @@ impl ProviderAdapterGuest for Component {
         model_json: String,
         session: Option<AdapterSessionContext>,
     ) -> Result<String, AdapterPluginError> {
-        let provider_json = provider_with_account_project(&provider_json);
         crate::adapter::build_body(
             &request_json,
             &provider_json,
