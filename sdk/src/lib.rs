@@ -47,6 +47,16 @@ pub mod model_source {
     });
 }
 
+/// Bindings for structured quota observations. This opt-in v2 world leaves the
+/// legacy health probe in `plugin` unchanged for existing components.
+pub mod health {
+    wit_bindgen::generate!({
+        path: "wit",
+        world: "plugin-health-v2",
+        pub_export_macro: true,
+    });
+}
+
 /// Bindings for the `plugin-adapter` world (§6.3). A component that provides a
 /// `provider-adapter` capability implements `adapter::exports::provider_adapter::Guest`
 /// and invokes `adapter::export!(Component with_types_in kinetix_plugin_sdk::adapter)`.

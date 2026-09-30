@@ -130,7 +130,7 @@ dependencies = [
 
 [[package]]
 name = "kinetix-plugin-antigravity-oauth"
-version = "0.1.10"
+version = "0.1.12"
 dependencies = [
  "kinetix-plugin-sdk",
  "serde",
@@ -167,7 +167,7 @@ dependencies = [
 
 [[package]]
 name = "kinetix-plugin-sdk"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "serde",
  "serde_json",
