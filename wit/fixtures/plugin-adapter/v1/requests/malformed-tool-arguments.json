@@ -1,0 +1,11 @@
+{
+  "schema": "kinetix.plugin.request",
+  "schema_version": 1,
+  "requested_model": "conformance-model",
+  "system": [],
+  "messages": [
+    {"role": "assistant", "parts": [{"type": "tool_call", "id": "call_bad", "name": "read_file", "arguments": "not-json"}]}
+  ],
+  "tools": [],
+  "stream": true
+}

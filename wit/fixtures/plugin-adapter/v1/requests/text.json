@@ -1,0 +1,10 @@
+{
+  "schema": "kinetix.plugin.request",
+  "schema_version": 1,
+  "requested_model": "conformance-model",
+  "system": ["conformance system"],
+  "messages": [{"role": "user", "parts": [{"type": "text", "text": "conformance text"}]}],
+  "tools": [],
+  "stream": true,
+  "thinking": null
+}

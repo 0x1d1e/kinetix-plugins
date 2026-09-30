@@ -16,6 +16,8 @@
 //! Reference source: 9router `open-sse/executors/antigravity.js` and
 //! `open-sse/translator/response/openai-to-antigravity.js`.
 
+use std::collections::HashMap;
+
 use serde_json::{json, Map, Value};
 
 /// The IDE fingerprint Antigravity expects (macOS on purpose, even on Linux).
@@ -99,12 +101,29 @@ pub fn build_body(
     model_json: &str,
     session_context: Option<&str>,
 ) -> Result<String, AdapterError> {
+    build_body_at(
+        request_json,
+        provider_json,
+        model_json,
+        session_context,
+        kinetix_plugin_sdk::helpers::now_unix_millis(),
+    )
+}
+
+fn build_body_at(
+    request_json: &str,
+    provider_json: &str,
+    model_json: &str,
+    session_context: Option<&str>,
+    now_unix_millis: u64,
+) -> Result<String, AdapterError> {
     let req: Value =
         serde_json::from_str(request_json).map_err(|e| bad(format!("bad request json: {e}")))?;
     let provider: Value = serde_json::from_str(provider_json).unwrap_or(Value::Null);
     let model: Value = serde_json::from_str(model_json).unwrap_or(Value::Null);
 
     validate_request_contract(&req)?;
+    validate_tool_history(&req)?;
     validate_canonical_extras(&provider, &req)?;
     validate_nonportable_controls(&provider, &req)?;
 
@@ -118,7 +137,7 @@ pub fn build_body(
 
     let project = project_id(&provider, &req)?;
     let session_id = session_id(&req, &provider, session_context);
-    let request_id = build_request_id(session_id.as_deref(), &upstream_model);
+    let request_id = build_request_id(session_id.as_deref(), &upstream_model, now_unix_millis);
 
     let system_instruction = req
         .get("system")
@@ -258,6 +277,78 @@ fn validate_request_contract(req: &Value) -> Result<(), AdapterError> {
             return Err(bad(format!(
                 "unsupported kinetix.plugin.request schema_version {version}"
             )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_tool_history(req: &Value) -> Result<(), AdapterError> {
+    let Some(messages) = req.get("messages").and_then(Value::as_array) else {
+        return Ok(());
+    };
+    let mut calls = HashMap::new();
+
+    for (message_index, message) in messages.iter().enumerate() {
+        let Some(parts) = message.get("parts").and_then(Value::as_array) else {
+            continue;
+        };
+        for (part_index, part) in parts.iter().enumerate() {
+            let location = format!("messages[{message_index}].parts[{part_index}]");
+            match part.get("type").and_then(Value::as_str) {
+                Some("tool_call") => {
+                    let id = part
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.trim().is_empty())
+                        .ok_or_else(|| {
+                            bad(format!("{location} requires a non-empty tool_call id"))
+                        })?;
+                    let name = part
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.trim().is_empty())
+                        .ok_or_else(|| bad(format!("{location} requires a non-empty tool name")))?;
+                    let arguments =
+                        part.get("arguments")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| {
+                                bad(format!("{location} requires JSON tool-call arguments"))
+                            })?;
+                    let arguments: Value = serde_json::from_str(arguments).map_err(|error| {
+                        bad(format!("{location} has invalid tool-call JSON: {error}"))
+                    })?;
+                    if !arguments.is_object() {
+                        return Err(bad(format!(
+                            "{location} tool-call arguments must be a JSON object"
+                        )));
+                    }
+                    if calls.insert(id.to_string(), name.to_string()).is_some() {
+                        return Err(bad(format!("{location} has duplicate tool_call id '{id}'")));
+                    }
+                }
+                Some("tool_result") => {
+                    let id = part
+                        .get("tool_call_id")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.trim().is_empty())
+                        .ok_or_else(|| {
+                            bad(format!("{location} requires a non-empty tool_call_id"))
+                        })?;
+                    let Some(call_name) = calls.get(id) else {
+                        return Err(bad(format!(
+                            "{location} references unknown tool_call_id '{id}'"
+                        )));
+                    };
+                    if let Some(name) = part.get("name").and_then(Value::as_str) {
+                        if name != call_name {
+                            return Err(bad(format!(
+                                "{location} tool name does not match tool_call_id '{id}'"
+                            )));
+                        }
+                    }
+                }
+                _ => {}
+            }
         }
     }
     Ok(())
@@ -530,8 +621,7 @@ fn session_id(req: &Value, provider: &Value, session_context: Option<&str>) -> O
 }
 
 /// `agent/<conversationId>/<ts>/<trajectoryId>/<step>` (9router's IDE shape).
-fn build_request_id(session_id: Option<&str>, model: &str) -> String {
-    let ts = kinetix_plugin_sdk::helpers::now_unix_millis();
+fn build_request_id(session_id: Option<&str>, model: &str, ts: u64) -> String {
     let request_seed = match session_id {
         Some(session_id) => format!("antigravity:conversation:{session_id}"),
         None => format!("antigravity:request:{ts}"),
@@ -886,7 +976,12 @@ fn sanitize_schema_node(
                 out.insert(key.clone(), value.clone());
             }
 
-            "maxLength" if policy == SchemaPolicy::Permissive => {}
+            "maxLength" => {
+                return Err(schema_error(
+                    &format!("{path}.maxLength"),
+                    "unsupported JSON Schema keyword 'maxLength'",
+                ));
+            }
 
             other => {
                 return Err(schema_error(
@@ -1002,20 +1097,27 @@ fn part_to_gemini(p: &Value) -> Option<Value> {
                 .and_then(|a| a.as_str())
                 .and_then(|s| serde_json::from_str(s).ok())
                 .unwrap_or_else(|| json!({}));
-            let mut part = json!({ "functionCall": { "name": name, "args": args } });
+            let mut function_call = json!({ "name": name, "args": args });
+            if let Some(id) = p.get("id").and_then(Value::as_str) {
+                function_call["id"] = json!(id);
+            }
+            let mut part = json!({ "functionCall": function_call });
             if let Some(sig) = p.get("signature").and_then(|s| s.as_str()) {
-                if let Some(obj) = part.as_object_mut() {
-                    obj.insert("thoughtSignature".into(), json!(sig));
-                }
+                part["thoughtSignature"] = json!(sig);
             }
             Some(part)
         }
         "tool_result" => {
             let name = sanitize_function_name(p.get("name").and_then(|n| n.as_str()).unwrap_or(""));
             let content = p.get("content").and_then(|c| c.as_str()).unwrap_or("");
-            Some(json!({
-                "functionResponse": { "name": name, "response": { "result": content } }
-            }))
+            let mut function_response = json!({
+                "name": name,
+                "response": { "result": content }
+            });
+            if let Some(id) = p.get("tool_call_id").and_then(Value::as_str) {
+                function_response["id"] = json!(id);
+            }
+            Some(json!({ "functionResponse": function_response }))
         }
         _ => None,
     }
@@ -1178,6 +1280,7 @@ pub fn parse_stream_chunk(data: &str) -> Result<String, AdapterError> {
     let mut tool_index: u32 = 0;
     if let Some(candidates) = resp.get("candidates").and_then(|c| c.as_array()) {
         for c in candidates {
+            let mut candidate_has_tool_calls = false;
             if let Some(parts) = c.pointer("/content/parts").and_then(|p| p.as_array()) {
                 for p in parts {
                     let text = p.get("text").and_then(|t| t.as_str());
@@ -1204,6 +1307,7 @@ pub fn parse_stream_chunk(data: &str) -> Result<String, AdapterError> {
                     }
 
                     if let Some(fc) = function_call {
+                        candidate_has_tool_calls = true;
                         let name = sanitize_function_name(
                             fc.get("name").and_then(|n| n.as_str()).unwrap_or(""),
                         );
@@ -1211,7 +1315,7 @@ pub fn parse_stream_chunk(data: &str) -> Result<String, AdapterError> {
                         events.push(json!({
                             "type": "tool_call_start",
                             "index": tool_index,
-                            "id": Value::Null,
+                            "id": fc.get("id").and_then(Value::as_str),
                             "name": name,
                             "signature": signature,
                         }));
@@ -1235,7 +1339,10 @@ pub fn parse_stream_chunk(data: &str) -> Result<String, AdapterError> {
                 }
             }
             if let Some(reason) = c.get("finishReason").and_then(|r| r.as_str()) {
-                events.push(json!({ "type": "finish", "reason": map_finish(reason) }));
+                events.push(json!({
+                    "type": "finish",
+                    "reason": map_finish(reason, candidate_has_tool_calls)
+                }));
             }
         }
     }
@@ -1260,8 +1367,9 @@ pub fn parse_full_response(body_json: &str) -> Result<String, AdapterError> {
     parse_stream_chunk(&resp.to_string())
 }
 
-fn map_finish(reason: &str) -> &'static str {
+fn map_finish(reason: &str, has_tool_calls: bool) -> &'static str {
     match reason {
+        "STOP" if has_tool_calls => "tool_calls",
         "STOP" => "stop",
         "MAX_TOKENS" => "length",
         "SAFETY" | "RECITATION" | "BLOCKLIST" | "PROHIBITED_CONTENT" => "content_filter",
@@ -1375,6 +1483,62 @@ fn sha256(data: &[u8]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct ConformanceAdapter;
+
+    impl kinetix_adapter_conformance::Adapter for ConformanceAdapter {
+        fn build_body(
+            &self,
+            request: &Value,
+            provider: &Value,
+            model: &Value,
+        ) -> Result<Value, String> {
+            let body = super::build_body_at(
+                &request.to_string(),
+                &provider.to_string(),
+                &model.to_string(),
+                None,
+                1_700_000_000_000,
+            )
+            .map_err(|error| format!("{}: {}", error.code, error.message))?;
+            serde_json::from_str(&body).map_err(|error| error.to_string())
+        }
+
+        fn parse_stream_chunk(&self, chunk: &Value) -> Result<Value, String> {
+            let events = super::parse_stream_chunk(&chunk.to_string())
+                .map_err(|error| format!("{}: {}", error.code, error.message))?;
+            serde_json::from_str(&events).map_err(|error| error.to_string())
+        }
+
+        fn parse_full_response(&self, response: &Value) -> Result<Value, String> {
+            let events = super::parse_full_response(&response.to_string())
+                .map_err(|error| format!("{}: {}", error.code, error.message))?;
+            serde_json::from_str(&events).map_err(|error| error.to_string())
+        }
+
+        fn classify_error(
+            &self,
+            status: u16,
+            body: &Value,
+            headers: &Value,
+        ) -> Result<Value, String> {
+            let evidence = super::classify_error(status, &body.to_string(), &headers.to_string())
+                .map_err(|error| format!("{}: {}", error.code, error.message))?;
+            serde_json::from_str(&evidence).map_err(|error| error.to_string())
+        }
+    }
+
+    #[test]
+    fn shared_adapter_conformance_fixtures() {
+        kinetix_adapter_conformance::check(
+            &ConformanceAdapter,
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/adapter-conformance.json"
+            )),
+        )
+        .unwrap();
+    }
 
     #[test]
     fn build_url_uses_daily_endpoint_as_default_and_from_provider() {
@@ -1932,7 +2096,7 @@ mod tests {
     }
 
     #[test]
-    fn permissive_tool_schema_strips_max_length_recursively() {
+    fn permissive_tool_schema_rejects_max_length_instead_of_dropping_it() {
         let provider = json!({ "capability_mode": "permissive" });
         let request = json!({
             "tools": [{
@@ -1965,18 +2129,11 @@ mod tests {
             }]
         });
 
-        let declarations = build_tool_declarations(&request, &provider).unwrap();
-        let schema = declarations[0].get("parametersJsonSchema").unwrap();
-        assert_eq!(schema["type"], "object");
-        assert_eq!(schema["required"], json!(["query"]));
-        assert_eq!(
-            schema.pointer("/properties/query/description"),
-            Some(&json!("Query to execute"))
-        );
-        assert!(schema.pointer("/properties/query/maxLength").is_none());
-        assert!(schema
-            .pointer("/properties/nested/items/properties/value/maxLength")
-            .is_none());
+        let error = build_tool_declarations(&request, &provider).unwrap_err();
+        assert_eq!(error.code, "bad_request");
+        assert!(error
+            .message
+            .contains("tool 'chrome_devtools_load'.properties.query.maxLength"));
     }
 
     #[test]

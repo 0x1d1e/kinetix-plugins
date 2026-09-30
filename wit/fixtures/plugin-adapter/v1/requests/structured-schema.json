@@ -1,0 +1,10 @@
+{
+  "schema": "kinetix.plugin.request",
+  "schema_version": 1,
+  "requested_model": "conformance-model",
+  "system": [],
+  "messages": [{"role": "user", "parts": [{"type": "text", "text": "Search files"}]}],
+  "tools": [{"name": "search_files", "description": "Search files", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "Text to search for"}}, "required": ["query"]}}],
+  "tool_choice": {"mode": "auto", "name": null},
+  "stream": true
+}
