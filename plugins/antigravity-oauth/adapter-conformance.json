@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "adapter": "antigravity",
+  "transports": [
+    {
+      "format": "antigravity",
+      "provider": {
+        "capability_mode": "permissive",
+        "extra_headers": "{\"x-antigravity-project\":\"conformance-project\"}"
+      },
+      "model": {"upstream_id": "gemini-3.7-flash-tiered"},
+      "capabilities": {
+        "text_generation": "supported",
+        "streaming": "supported",
+        "non_streaming": "supported",
+        "tool_calls": "supported",
+        "parallel_tool_calls": "supported",
+        "tool_result_continuation": "supported",
+        "tool_result_errors": "supported",
+        "image_input": "supported",
+        "reasoning_controls": "supported",
+        "reasoning_output": "supported",
+        "structured_schemas": "supported",
+        "schema_max_length": "unsupported",
+        "stop_reasons": "supported",
+        "usage_extraction": "supported",
+        "error_classification": "supported",
+        "client_cancellation": "not_applicable"
+      }
+    }
+  ]
+}

@@ -316,6 +316,32 @@ fn validate_tool_history(req: &Value) -> Result<(), AdapterError> {
                         "id",
                         &format!("{location} assistant tool_call"),
                     )?;
+                    required_non_empty_part_str(
+                        part,
+                        "name",
+                        &format!("{location} assistant tool_call"),
+                    )?;
+                    let arguments =
+                        part.get("arguments")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| {
+                                err(
+                                    "invalid_request",
+                                    format!("{location} requires JSON tool-call arguments"),
+                                )
+                            })?;
+                    let arguments: Value = serde_json::from_str(arguments).map_err(|error| {
+                        err(
+                            "invalid_request",
+                            format!("{location} has invalid tool-call JSON: {error}"),
+                        )
+                    })?;
+                    if !arguments.is_object() {
+                        return Err(err(
+                            "invalid_request",
+                            format!("{location} tool-call arguments must be a JSON object"),
+                        ));
+                    }
                     if !tool_call_ids.insert(id.to_string()) {
                         return Err(err(
                             "invalid_request",
@@ -835,9 +861,11 @@ pub fn build_body(
     let req: Value = serde_json::from_str(request_json)
         .map_err(|e| err("bad_request", format!("bad request json: {e}")))?;
     validate_tool_history(&req)?;
+    validate_supported_request_features(&req)?;
     let model: Value = serde_json::from_str(model_json)
         .map_err(|e| err("bad_request", format!("bad model json: {e}")))?;
     let transport = model_transport(&model)?;
+    validate_tool_result_error_support(&req, &transport.format)?;
     let body = match transport.format {
         TransportFormat::OpenAiChat => build_chat_body(&req, &model)?,
         TransportFormat::OpenAiResponses => build_responses_body(&req, &model),
@@ -851,6 +879,67 @@ pub fn build_body(
     };
 
     Ok(body.to_string())
+}
+
+fn validate_tool_result_error_support(
+    req: &Value,
+    format: &TransportFormat,
+) -> Result<(), AdapterError> {
+    if matches!(format, TransportFormat::Anthropic) {
+        return Ok(());
+    }
+
+    let has_failed_tool_result = req
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .flat_map(|message| {
+            message
+                .get("parts")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+        .any(|part| {
+            part.get("type").and_then(Value::as_str) == Some("tool_result")
+                && part.get("is_error").and_then(Value::as_bool) == Some(true)
+        });
+    if has_failed_tool_result {
+        return Err(err(
+            "unsupported_capability",
+            "OpenCode OpenAI transports do not support failed tool results",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_supported_request_features(req: &Value) -> Result<(), AdapterError> {
+    if !req.get("thinking").unwrap_or(&Value::Null).is_null() {
+        return Err(err(
+            "unsupported_capability",
+            "OpenCode adapter does not support canonical reasoning controls",
+        ));
+    }
+
+    if let Some(messages) = req.get("messages").and_then(Value::as_array) {
+        for (message_index, message) in messages.iter().enumerate() {
+            if let Some(parts) = message.get("parts").and_then(Value::as_array) {
+                for (part_index, part) in parts.iter().enumerate() {
+                    if matches!(
+                        part.get("type").and_then(Value::as_str),
+                        Some("image" | "image_url")
+                    ) {
+                        return Err(err(
+                            "unsupported_capability",
+                            format!("OpenCode adapter does not support image input at messages[{message_index}].parts[{part_index}]"),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn get_header<'a>(headers: &'a Value, name: &str) -> Option<&'a str> {
@@ -1119,6 +1208,11 @@ fn parse_responses(value: &Value) -> Vec<Value> {
                 events.push(json!({"type":"text_delta","text":delta}));
             }
         }
+        "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
+            if let Some(delta) = value.get("delta").and_then(Value::as_str) {
+                events.push(json!({"type":"thinking_delta","text":delta}));
+            }
+        }
         "response.output_item.added" => {
             let Some(item) = value.get("item") else {
                 return events;
@@ -1157,6 +1251,15 @@ fn parse_responses(value: &Value) -> Vec<Value> {
                 }
             }
         }
+        "response.incomplete" => {
+            let reason = value
+                .pointer("/response/incomplete_details/reason")
+                .and_then(Value::as_str);
+            events.push(json!({
+                "type":"finish",
+                "reason":if reason == Some("max_output_tokens") { "length" } else { "stop" }
+            }));
+        }
         "response.completed" => {
             if let Some(usage) = value.pointer("/response/usage") {
                 events.push(json!({
@@ -1185,9 +1288,17 @@ fn parse_responses(value: &Value) -> Vec<Value> {
     events
 }
 
+fn response_envelope(events: Vec<Value>) -> Value {
+    json!({
+        "schema": "kinetix.plugin.response",
+        "schema_version": 1,
+        "events": events,
+    })
+}
+
 pub fn parse_stream_chunk(data: &str) -> Result<String, AdapterError> {
     if data.trim().is_empty() || data.trim() == "[DONE]" {
-        return Ok("[]".into());
+        return Ok(response_envelope(Vec::new()).to_string());
     }
 
     let value: Value = serde_json::from_str(data)
@@ -1209,7 +1320,7 @@ pub fn parse_stream_chunk(data: &str) -> Result<String, AdapterError> {
     } else {
         parse_chat(&value)
     };
-    Ok(Value::Array(events).to_string())
+    Ok(response_envelope(events).to_string())
 }
 
 fn parse_anthropic_full(value: &Value) -> Result<Vec<Value>, AdapterError> {
@@ -1278,11 +1389,11 @@ pub fn parse_full_response(body_json: &str) -> Result<String, AdapterError> {
         .map_err(|e| err("protocol_error", format!("invalid response JSON: {e}")))?;
 
     if value.get("object").and_then(Value::as_str) == Some("chat.completion") {
-        return Ok(Value::Array(parse_chat(&value)).to_string());
+        return Ok(response_envelope(parse_chat(&value)).to_string());
     }
 
     if value.get("type").and_then(Value::as_str) == Some("message") {
-        return Ok(Value::Array(parse_anthropic_full(&value)?).to_string());
+        return Ok(response_envelope(parse_anthropic_full(&value)?).to_string());
     }
 
     if value.get("object").and_then(Value::as_str) == Some("response")
@@ -1323,6 +1434,17 @@ pub fn parse_full_response(body_json: &str) -> Result<String, AdapterError> {
                     continue;
                 }
 
+                if item.get("type").and_then(Value::as_str) == Some("reasoning") {
+                    if let Some(summary) = item.get("summary").and_then(Value::as_array) {
+                        for part in summary {
+                            if let Some(text) = part.get("text").and_then(Value::as_str) {
+                                if !text.is_empty() {
+                                    events.push(json!({"type":"thinking_delta","text":text}));
+                                }
+                            }
+                        }
+                    }
+                }
                 if let Some(content) = item.get("content").and_then(Value::as_array) {
                     for block in content {
                         if let Some(text) = block.get("text").and_then(Value::as_str) {
@@ -1345,11 +1467,20 @@ pub fn parse_full_response(body_json: &str) -> Result<String, AdapterError> {
                 }));
             }
         }
-        events.push(json!({
-            "type":"finish",
-            "reason":if has_tool_calls { "tool_calls" } else { "stop" }
-        }));
-        return Ok(Value::Array(events).to_string());
+        let finish_reason = if has_tool_calls {
+            "tool_calls"
+        } else if value.get("status").and_then(Value::as_str) == Some("incomplete")
+            && value
+                .pointer("/incomplete_details/reason")
+                .and_then(Value::as_str)
+                == Some("max_output_tokens")
+        {
+            "length"
+        } else {
+            "stop"
+        };
+        events.push(json!({"type":"finish","reason":finish_reason}));
+        return Ok(response_envelope(events).to_string());
     }
 
     Err(err("protocol_error", "unsupported OpenCode response shape"))
@@ -1358,6 +1489,84 @@ pub fn parse_full_response(body_json: &str) -> Result<String, AdapterError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Keep event-focused tests concise while still checking the public envelope.
+    fn unpack_test_response(response: String) -> Result<String, AdapterError> {
+        let envelope: Value = serde_json::from_str(&response)
+            .map_err(|error| err("protocol_error", error.to_string()))?;
+        if envelope.get("schema").and_then(Value::as_str) != Some("kinetix.plugin.response")
+            || envelope.get("schema_version").and_then(Value::as_u64) != Some(1)
+        {
+            return Err(err("protocol_error", "invalid canonical response envelope"));
+        }
+        let events = envelope
+            .get("events")
+            .and_then(Value::as_array)
+            .ok_or_else(|| err("protocol_error", "response envelope has no events array"))?;
+        Ok(Value::Array(events.clone()).to_string())
+    }
+
+    fn parse_stream_chunk(data: &str) -> Result<String, AdapterError> {
+        unpack_test_response(super::parse_stream_chunk(data)?)
+    }
+
+    fn parse_full_response(data: &str) -> Result<String, AdapterError> {
+        unpack_test_response(super::parse_full_response(data)?)
+    }
+
+    struct ConformanceAdapter;
+
+    impl kinetix_adapter_conformance::Adapter for ConformanceAdapter {
+        fn build_body(
+            &self,
+            request: &Value,
+            provider: &Value,
+            model: &Value,
+        ) -> Result<Value, String> {
+            let body = super::build_body(
+                &request.to_string(),
+                &provider.to_string(),
+                &model.to_string(),
+            )
+            .map_err(|error| format!("{}: {}", error.code, error.message))?;
+            serde_json::from_str(&body).map_err(|error| error.to_string())
+        }
+
+        fn parse_stream_chunk(&self, chunk: &Value) -> Result<Value, String> {
+            let events = super::parse_stream_chunk(&chunk.to_string())
+                .map_err(|error| format!("{}: {}", error.code, error.message))?;
+            serde_json::from_str(&events).map_err(|error| error.to_string())
+        }
+
+        fn parse_full_response(&self, response: &Value) -> Result<Value, String> {
+            let events = super::parse_full_response(&response.to_string())
+                .map_err(|error| format!("{}: {}", error.code, error.message))?;
+            serde_json::from_str(&events).map_err(|error| error.to_string())
+        }
+
+        fn classify_error(
+            &self,
+            status: u16,
+            body: &Value,
+            headers: &Value,
+        ) -> Result<Value, String> {
+            let evidence = super::classify_error(status, &body.to_string(), &headers.to_string())
+                .map_err(|error| format!("{}: {}", error.code, error.message))?;
+            serde_json::from_str(&evidence).map_err(|error| error.to_string())
+        }
+    }
+
+    #[test]
+    fn shared_adapter_conformance_fixtures() {
+        kinetix_adapter_conformance::check(
+            &ConformanceAdapter,
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/adapter-conformance.json"
+            )),
+        )
+        .unwrap();
+    }
 
     fn test_model(id: &str, format: TransportFormat, endpoint: &str) -> String {
         let mut capabilities = ModelCapabilitiesV3::default();
@@ -1617,7 +1826,7 @@ mod tests {
     }
 
     #[test]
-    fn chat_body_does_not_invent_mimo_thinking_wire_control() {
+    fn chat_body_rejects_unsupported_mimo_thinking_control() {
         let request = serde_json::json!({
             "requested_model": "mimo-v2.6-flash-free",
             "system": [],
@@ -1626,19 +1835,17 @@ mod tests {
             "stream": true,
             "thinking": {"level": "high"}
         });
-        let body = build_body(
+        let error = build_body(
             &request.to_string(),
             "{}",
             &chat_model("mimo-v2.6-flash-free"),
         )
-        .unwrap();
-        let out: Value = serde_json::from_str(&body).unwrap();
-        assert!(out.get("thinking").is_none());
-        assert!(out.get("reasoning_effort").is_none());
+        .unwrap_err();
+        assert_eq!(error.code, "unsupported_capability");
     }
 
     #[test]
-    fn responses_body_does_not_invent_thinking_wire_control() {
+    fn responses_body_rejects_unsupported_thinking_control() {
         let request = serde_json::json!({
             "requested_model": "muse-spark-1.3-contributor-free",
             "system": [],
@@ -1647,20 +1854,17 @@ mod tests {
             "stream": true,
             "thinking": {"level": "high"}
         });
-        let body = build_body(
+        let error = build_body(
             &request.to_string(),
             "{}",
             &responses_model("muse-spark-1.3-contributor-free"),
         )
-        .unwrap();
-        let out: Value = serde_json::from_str(&body).unwrap();
-        assert!(out.get("thinking").is_none());
-        assert!(out.get("reasoning_effort").is_none());
-        assert!(out.get("reasoning").is_none());
+        .unwrap_err();
+        assert_eq!(error.code, "unsupported_capability");
     }
 
     #[test]
-    fn non_toggle_chat_model_does_not_invent_thinking_wire_control() {
+    fn non_toggle_chat_model_rejects_unsupported_thinking_control() {
         let request = serde_json::json!({
             "requested_model": "mimo-v2.5-free",
             "system": [],
@@ -1669,10 +1873,9 @@ mod tests {
             "stream": true,
             "thinking": {"level": "high"}
         });
-        let body = build_body(&request.to_string(), "{}", &chat_model("mimo-v2.5-free")).unwrap();
-        let out: Value = serde_json::from_str(&body).unwrap();
-        assert!(out.get("thinking").is_none());
-        assert!(out.get("reasoning_effort").is_none());
+        let error =
+            build_body(&request.to_string(), "{}", &chat_model("mimo-v2.5-free")).unwrap_err();
+        assert_eq!(error.code, "unsupported_capability");
     }
 
     #[test]

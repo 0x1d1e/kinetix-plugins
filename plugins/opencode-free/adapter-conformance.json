@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "adapter": "opencode-free",
+  "transports": [
+    {
+      "format": "openai-chat",
+      "model": {
+        "upstream_id": "mimo-v2.6-flash-free",
+        "capabilities_json": "{\"schema_version\":3,\"transport\":{\"format\":\"openai-chat\",\"endpoint\":\"/zen/v1/chat/completions\"}}"
+      },
+      "capabilities": {
+        "text_generation": "supported",
+        "streaming": "supported",
+        "non_streaming": "supported",
+        "tool_calls": "supported",
+        "parallel_tool_calls": "supported",
+        "tool_result_continuation": "supported",
+        "tool_result_errors": "unsupported",
+        "image_input": "unsupported",
+        "reasoning_controls": "unsupported",
+        "reasoning_output": "supported",
+        "structured_schemas": "supported",
+        "schema_max_length": "supported",
+        "stop_reasons": "supported",
+        "usage_extraction": "supported",
+        "error_classification": "supported",
+        "client_cancellation": "not_applicable"
+      }
+    },
+    {
+      "format": "openai-responses",
+      "model": {
+        "upstream_id": "muse-spark-1.3-contributor-free",
+        "capabilities_json": "{\"schema_version\":3,\"transport\":{\"format\":\"openai-responses\",\"endpoint\":\"/zen/v1/responses\"}}"
+      },
+      "capabilities": {
+        "text_generation": "supported",
+        "streaming": "supported",
+        "non_streaming": "supported",
+        "tool_calls": "supported",
+        "parallel_tool_calls": "supported",
+        "tool_result_continuation": "supported",
+        "tool_result_errors": "unsupported",
+        "image_input": "unsupported",
+        "reasoning_controls": "unsupported",
+        "reasoning_output": "supported",
+        "structured_schemas": "supported",
+        "schema_max_length": "supported",
+        "stop_reasons": "supported",
+        "usage_extraction": "supported",
+        "error_classification": "supported",
+        "client_cancellation": "not_applicable"
+      }
+    },
+    {
+      "format": "anthropic",
+      "model": {
+        "upstream_id": "union-alpha",
+        "capabilities_json": "{\"schema_version\":3,\"transport\":{\"format\":\"anthropic\",\"endpoint\":\"/zen/v1/messages\"}}"
+      },
+      "capabilities": {
+        "text_generation": "supported",
+        "streaming": "supported",
+        "non_streaming": "supported",
+        "tool_calls": "supported",
+        "parallel_tool_calls": "supported",
+        "tool_result_continuation": "supported",
+        "tool_result_errors": "supported",
+        "image_input": "unsupported",
+        "reasoning_controls": "unsupported",
+        "reasoning_output": "supported",
+        "structured_schemas": "supported",
+        "schema_max_length": "supported",
+        "stop_reasons": "supported",
+        "usage_extraction": "supported",
+        "error_classification": "supported",
+        "client_cancellation": "not_applicable"
+      }
+    }
+  ]
+}

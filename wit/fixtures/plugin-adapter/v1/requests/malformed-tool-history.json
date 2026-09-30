@@ -1,0 +1,11 @@
+{
+  "schema": "kinetix.plugin.request",
+  "schema_version": 1,
+  "requested_model": "conformance-model",
+  "system": [],
+  "messages": [
+    {"role": "tool", "parts": [{"type": "tool_result", "tool_call_id": "unknown_call", "name": "read_file", "content": "orphan result"}]}
+  ],
+  "tools": [],
+  "stream": true
+}

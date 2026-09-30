@@ -1,0 +1,211 @@
+{
+  "transports": {
+    "antigravity": {
+      "stream": [{
+        "response": {
+          "responseId": "req_conformance",
+          "candidates": [{
+            "content": {"parts": [
+              {"thought": true, "text": "consider tools", "thoughtSignature": "sig-parallel"},
+              {"text": "answer"},
+              {"functionCall": {"name": "get_weather", "args": {"city": "Paris"}}},
+              {"functionCall": {"name": "read_file", "args": {"path": "src/main.rs"}}, "thoughtSignature": "sig-tool-b"}
+            ]},
+            "finishReason": "STOP"
+          }],
+          "usageMetadata": {
+            "promptTokenCount": 20,
+            "candidatesTokenCount": 8,
+            "cachedContentTokenCount": 2,
+            "thoughtsTokenCount": 3
+          }
+        }
+      }],
+      "full": {
+        "response": {
+          "responseId": "req_conformance",
+          "candidates": [{
+            "content": {"parts": [
+              {"thought": true, "text": "consider tools", "thoughtSignature": "sig-parallel"},
+              {"text": "answer"},
+              {"functionCall": {"name": "get_weather", "args": {"city": "Paris"}}},
+              {"functionCall": {"name": "read_file", "args": {"path": "src/main.rs"}}, "thoughtSignature": "sig-tool-b"}
+            ]},
+            "finishReason": "STOP"
+          }],
+          "usageMetadata": {
+            "promptTokenCount": 20,
+            "candidatesTokenCount": 8,
+            "cachedContentTokenCount": 2,
+            "thoughtsTokenCount": 3
+          }
+        }
+      },
+      "expected": {
+        "request_id": "req_conformance",
+        "thinking": "consider tools",
+        "thinking_signature": "sig-parallel",
+        "text": "answer",
+        "tools": [
+          {"index": 0, "name": "get_weather", "arguments": {"city": "Paris"}},
+          {"index": 1, "name": "read_file", "arguments": {"path": "src/main.rs"}, "signature": "sig-tool-b"}
+        ],
+        "finish_reason": "tool_calls",
+        "usage": {"input": 20, "output": 8, "cached": 2, "cache_write": null, "thinking": 3}
+      },
+      "stop_probes": [
+        {
+          "stream": {"response": {"candidates": [{"content": {"parts": []}, "finishReason": "MAX_TOKENS"}]}},
+          "full": {"response": {"candidates": [{"content": {"parts": []}, "finishReason": "MAX_TOKENS"}]}},
+          "expected": "length"
+        },
+        {
+          "stream": {"response": {"candidates": [{"content": {"parts": []}, "finishReason": "STOP"}]}},
+          "full": {"response": {"candidates": [{"content": {"parts": []}, "finishReason": "STOP"}]}},
+          "expected": "stop"
+        }
+      ]
+    },
+    "openai-chat": {
+      "stream": [
+        {"id": "req_conformance", "choices": [{"delta": {"reasoning_content": "consider tools", "content": "answer", "tool_calls": [
+          {"index": 0, "id": "call_weather", "type": "function", "function": {"name": "get_weather", "arguments": "{\"city\":\"Paris\"}"}},
+          {"index": 1, "id": "call_read", "type": "function", "function": {"name": "read_file", "arguments": "{\"path\":\"src/main.rs\"}"}}
+        ]}, "finish_reason": null}]},
+        {"choices": [{"delta": {}, "finish_reason": "tool_calls"}], "usage": {"prompt_tokens": 20, "completion_tokens": 8, "prompt_tokens_details": {"cached_tokens": 2}, "completion_tokens_details": {"reasoning_tokens": 3}}}
+      ],
+      "full": {
+        "id": "req_conformance",
+        "object": "chat.completion",
+        "choices": [{"index": 0, "message": {"reasoning_content": "consider tools", "content": "answer", "tool_calls": [
+          {"index": 0, "id": "call_weather", "type": "function", "function": {"name": "get_weather", "arguments": "{\"city\":\"Paris\"}"}},
+          {"index": 1, "id": "call_read", "type": "function", "function": {"name": "read_file", "arguments": "{\"path\":\"src/main.rs\"}"}}
+        ]}, "finish_reason": "tool_calls"}],
+        "usage": {"prompt_tokens": 20, "completion_tokens": 8, "prompt_tokens_details": {"cached_tokens": 2}, "completion_tokens_details": {"reasoning_tokens": 3}}
+      },
+      "expected": {
+        "request_id": "req_conformance",
+        "thinking": "consider tools",
+        "text": "answer",
+        "tools": [
+          {"index": 0, "id": "call_weather", "name": "get_weather", "arguments": {"city": "Paris"}},
+          {"index": 1, "id": "call_read", "name": "read_file", "arguments": {"path": "src/main.rs"}}
+        ],
+        "finish_reason": "tool_calls",
+        "usage": {"input": 20, "output": 8, "cached": 2, "cache_write": null, "thinking": 3}
+      },
+      "stop_probes": [
+        {
+          "stream": {"id": "req_stop", "choices": [{"delta": {}, "finish_reason": "length"}]},
+          "full": {"id": "req_stop", "object": "chat.completion", "choices": [{"message": {"content": ""}, "finish_reason": "length"}]},
+          "expected": "length"
+        },
+        {
+          "stream": {"id": "req_stop", "choices": [{"delta": {}, "finish_reason": "stop"}]},
+          "full": {"id": "req_stop", "object": "chat.completion", "choices": [{"message": {"content": ""}, "finish_reason": "stop"}]},
+          "expected": "stop"
+        }
+      ]
+    },
+    "openai-responses": {
+      "stream": [
+        {"type": "response.created", "response": {"id": "req_conformance"}},
+        {"type": "response.reasoning_summary_text.delta", "delta": "consider tools"},
+        {"type": "response.output_text.delta", "delta": "answer"},
+        {"type": "response.output_item.added", "output_index": 2, "item": {"type": "function_call", "call_id": "call_weather", "name": "get_weather"}},
+        {"type": "response.function_call_arguments.delta", "output_index": 2, "delta": "{\"city\":\"Paris\"}"},
+        {"type": "response.output_item.added", "output_index": 3, "item": {"type": "function_call", "call_id": "call_read", "name": "read_file"}},
+        {"type": "response.function_call_arguments.delta", "output_index": 3, "delta": "{\"path\":\"src/main.rs\"}"},
+        {"type": "response.completed", "response": {"id": "req_conformance", "output": [
+          {"type": "function_call", "call_id": "call_weather", "name": "get_weather"},
+          {"type": "function_call", "call_id": "call_read", "name": "read_file"}
+        ], "usage": {"input_tokens": 20, "output_tokens": 8, "input_tokens_details": {"cached_tokens": 2}, "output_tokens_details": {"reasoning_tokens": 3}}}}
+      ],
+      "full": {
+        "id": "req_conformance",
+        "object": "response",
+        "output": [
+          {"type": "reasoning", "summary": [{"type": "summary_text", "text": "consider tools"}]},
+          {"type": "message", "content": [{"type": "output_text", "text": "answer"}]},
+          {"type": "function_call", "call_id": "call_weather", "name": "get_weather", "arguments": "{\"city\":\"Paris\"}"},
+          {"type": "function_call", "call_id": "call_read", "name": "read_file", "arguments": "{\"path\":\"src/main.rs\"}"}
+        ],
+        "usage": {"input_tokens": 20, "output_tokens": 8, "input_tokens_details": {"cached_tokens": 2}, "output_tokens_details": {"reasoning_tokens": 3}}
+      },
+      "expected": {
+        "request_id": "req_conformance",
+        "thinking": "consider tools",
+        "text": "answer",
+        "tools": [
+          {"index": 2, "id": "call_weather", "name": "get_weather", "arguments": {"city": "Paris"}},
+          {"index": 3, "id": "call_read", "name": "read_file", "arguments": {"path": "src/main.rs"}}
+        ],
+        "finish_reason": "tool_calls",
+        "usage": {"input": 20, "output": 8, "cached": 2, "cache_write": null, "thinking": 3}
+      },
+      "stop_probes": [
+        {
+          "stream": {"type": "response.incomplete", "response": {"id": "req_stop", "incomplete_details": {"reason": "max_output_tokens"}}},
+          "full": {"id": "req_stop", "object": "response", "status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}, "output": []},
+          "expected": "length"
+        },
+        {
+          "stream": {"type": "response.completed", "response": {"id": "req_stop", "output": []}},
+          "full": {"id": "req_stop", "object": "response", "status": "completed", "output": []},
+          "expected": "stop"
+        }
+      ]
+    },
+    "anthropic": {
+      "stream": [
+        {"type": "message_start", "message": {"id": "req_conformance", "usage": {"input_tokens": 20, "cache_read_input_tokens": 2, "cache_creation_input_tokens": 1}}},
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": "", "signature": null}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "consider tools"}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "sig-thinking"}},
+        {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "answer"}},
+        {"type": "content_block_start", "index": 2, "content_block": {"type": "tool_use", "id": "call_weather", "name": "get_weather", "input": {}}},
+        {"type": "content_block_delta", "index": 2, "delta": {"type": "input_json_delta", "partial_json": "{\"city\":\"Paris\"}"}},
+        {"type": "content_block_start", "index": 3, "content_block": {"type": "tool_use", "id": "call_read", "name": "read_file", "input": {}}},
+        {"type": "content_block_delta", "index": 3, "delta": {"type": "input_json_delta", "partial_json": "{\"path\":\"src/main.rs\"}"}},
+        {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 8, "thinking_tokens": 3}}
+      ],
+      "full": {
+        "type": "message",
+        "id": "req_conformance",
+        "content": [
+          {"type": "thinking", "thinking": "consider tools", "signature": "sig-thinking"},
+          {"type": "text", "text": "answer"},
+          {"type": "tool_use", "id": "call_weather", "name": "get_weather", "input": {"city": "Paris"}},
+          {"type": "tool_use", "id": "call_read", "name": "read_file", "input": {"path": "src/main.rs"}}
+        ],
+        "stop_reason": "tool_use",
+        "usage": {"input_tokens": 20, "output_tokens": 8, "cache_read_input_tokens": 2, "cache_creation_input_tokens": 1, "thinking_tokens": 3}
+      },
+      "expected": {
+        "request_id": "req_conformance",
+        "thinking": "consider tools",
+        "thinking_signature": "sig-thinking",
+        "text": "answer",
+        "tools": [
+          {"index": 2, "id": "call_weather", "name": "get_weather", "arguments": {"city": "Paris"}},
+          {"index": 3, "id": "call_read", "name": "read_file", "arguments": {"path": "src/main.rs"}}
+        ],
+        "finish_reason": "tool_calls",
+        "usage": {"input": 20, "output": 8, "cached": 2, "cache_write": 1, "thinking": 3}
+      },
+      "stop_probes": [
+        {
+          "stream": {"type": "message_delta", "delta": {"stop_reason": "max_tokens"}, "usage": {"output_tokens": 8}},
+          "full": {"type": "message", "id": "req_stop", "content": [], "stop_reason": "max_tokens", "usage": {"input_tokens": 20, "output_tokens": 8}},
+          "expected": "length"
+        },
+        {
+          "stream": {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {}},
+          "full": {"type": "message", "id": "req_stop", "content": [], "stop_reason": "end_turn", "usage": {}},
+          "expected": "stop"
+        }
+      ]
+    }
+  }
+}
