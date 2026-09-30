@@ -54,8 +54,8 @@
       "publisher": "Kinetix",
       "official": true,
       "homepage": "https://github.com/PrightCord/kinetix-plugins/tree/main/plugins/antigravity-oauth",
-      "latest_version": "0.1.9",
-      "artifact_name": "dev.kinetix.antigravity-oauth-0.1.9.kxp",
+      "latest_version": "0.1.12",
+      "artifact_name": "dev.kinetix.antigravity-oauth-0.1.12.kxp",
       "capabilities": [
         "credential_strategy",
         "auth_flow",
@@ -63,8 +63,8 @@
       ],
       "installable": true,
       "distribution": {
-        "url": "https://github.com/PrightCord/kinetix-plugins/releases/download/antigravity-oauth-v0.1.9/dev.kinetix.antigravity-oauth-0.1.9.kxp",
-        "sha256": "44ead59946db0efb9e8a191e2acb2cc309385bca6d8d0efce1493dcf9152fc7f",
+        "url": "https://github.com/PrightCord/kinetix-plugins/releases/download/antigravity-oauth-v0.1.12/dev.kinetix.antigravity-oauth-0.1.12.kxp",
+        "sha256": "935b3ef756aed3ed27143845ee501a2bc0ab18af80ea763d8969ff7a4c6724a5",
         "publisher_key_id": "kinetix-official-v1",
         "allowed_hosts": [
           "github.com",
@@ -103,16 +103,16 @@
       "publisher": "Kinetix",
       "official": true,
       "homepage": "https://github.com/PrightCord/kinetix-plugins/tree/main/plugins/opencode-free",
-      "latest_version": "0.1.7",
-      "artifact_name": "dev.kinetix.opencode-free-0.1.7.kxp",
+      "latest_version": "0.1.8",
+      "artifact_name": "dev.kinetix.opencode-free-0.1.8.kxp",
       "capabilities": [
         "model_source",
         "provider_adapter"
       ],
       "installable": true,
       "distribution": {
-        "url": "https://github.com/PrightCord/kinetix-plugins/releases/download/opencode-free-v0.1.7/dev.kinetix.opencode-free-0.1.7.kxp",
-        "sha256": "bc03f29c0b4d4f6c2aacf1a2d7c8e0375c4f7b1b44f301634eed123604c92f3e",
+        "url": "https://github.com/PrightCord/kinetix-plugins/releases/download/opencode-free-v0.1.8/dev.kinetix.opencode-free-0.1.8.kxp",
+        "sha256": "66f770e35d95451917fd542724ac59df6e054f8e0bfb929c2cefd66aee17e344",
         "publisher_key_id": "kinetix-official-v1",
         "allowed_hosts": [
           "github.com",
