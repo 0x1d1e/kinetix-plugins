@@ -1272,6 +1272,14 @@ fn is_transient(message: &str) -> bool {
 // Stream parsing → canonical events
 // ---------------------------------------------------------------------------
 
+fn response_envelope(events: Vec<Value>) -> Value {
+    json!({
+        "schema": "kinetix.plugin.response",
+        "schema_version": 1,
+        "events": events,
+    })
+}
+
 pub fn parse_stream_chunk(data: &str) -> Result<String, AdapterError> {
     let v: Value = serde_json::from_str(data).map_err(|e| bad(format!("bad sse json: {e}")))?;
     // Antigravity wraps everything in a `response` object.
@@ -1362,7 +1370,7 @@ pub fn parse_stream_chunk(data: &str) -> Result<String, AdapterError> {
         }));
     }
 
-    Ok(Value::Array(events).to_string())
+    Ok(response_envelope(events).to_string())
 }
 
 pub fn parse_full_response(body_json: &str) -> Result<String, AdapterError> {
@@ -1488,6 +1496,30 @@ fn sha256(data: &[u8]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Keep event-focused tests concise while still checking the public envelope.
+    fn unpack_test_response(response: String) -> Result<String, AdapterError> {
+        let envelope: Value = serde_json::from_str(&response)
+            .map_err(|error| err("protocol_error", error.to_string()))?;
+        if envelope.get("schema").and_then(Value::as_str) != Some("kinetix.plugin.response")
+            || envelope.get("schema_version").and_then(Value::as_u64) != Some(1)
+        {
+            return Err(err("protocol_error", "invalid canonical response envelope"));
+        }
+        let events = envelope
+            .get("events")
+            .and_then(Value::as_array)
+            .ok_or_else(|| err("protocol_error", "response envelope has no events array"))?;
+        Ok(Value::Array(events.clone()).to_string())
+    }
+
+    fn parse_stream_chunk(data: &str) -> Result<String, AdapterError> {
+        unpack_test_response(super::parse_stream_chunk(data)?)
+    }
+
+    fn parse_full_response(data: &str) -> Result<String, AdapterError> {
+        unpack_test_response(super::parse_full_response(data)?)
+    }
 
     struct ConformanceAdapter;
 

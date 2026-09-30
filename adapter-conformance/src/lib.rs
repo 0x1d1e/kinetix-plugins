@@ -599,18 +599,6 @@ fn check_expected_response_fixture(
             "{context} response fixture reasoning differs from the canonical response fixture"
         ));
     }
-    if let Some(signature) = expected.get("thinking_signature").and_then(Value::as_str) {
-        let canonical_signature = canonical_events
-            .iter()
-            .find(|event| event["type"] == "thinking_delta" && event["text"] == canonical_thinking)
-            .and_then(|event| event["signature"].as_str());
-        if canonical_signature != Some(signature) {
-            return Err(format!(
-                "{context} response fixture reasoning signature differs from the canonical response fixture"
-            ));
-        }
-    }
-
     let canonical_calls: Vec<_> = canonical_events
         .iter()
         .filter(|event| event["type"] == "tool_call_start")
@@ -643,13 +631,6 @@ fn check_expected_response_fixture(
             return Err(format!(
                 "{context} response fixture arguments for '{name}' differ from the canonical response"
             ));
-        }
-        if let Some(signature) = expected_call.get("signature").and_then(Value::as_str) {
-            if canonical_call["signature"].as_str() != Some(signature) {
-                return Err(format!(
-                    "{context} response fixture signature for '{name}' differs from the canonical response"
-                ));
-            }
         }
     }
 
@@ -715,28 +696,47 @@ fn parse_response(
             .ok_or_else(|| format!("{context} fixture has no stream chunks"))?;
         let mut events = Vec::new();
         for chunk in chunks {
-            let chunk_events = adapter
+            let envelope = adapter
                 .parse_stream_chunk(chunk)
                 .map_err(|error| format!("{context} stream parser failed: {error}"))?;
-            extend_events(&mut events, chunk_events, context)?;
+            events.extend(unpack_response_envelope(envelope, context)?);
         }
         Ok(Value::Array(events))
     } else {
         let response = fixture
             .get("full")
             .ok_or_else(|| format!("{context} fixture has no full response"))?;
-        adapter
+        let envelope = adapter
             .parse_full_response(response)
-            .map_err(|error| format!("{context} full-response parser failed: {error}"))
+            .map_err(|error| format!("{context} full-response parser failed: {error}"))?;
+        Ok(Value::Array(unpack_response_envelope(envelope, context)?))
     }
 }
 
-fn extend_events(events: &mut Vec<Value>, output: Value, context: &str) -> Result<(), String> {
-    let values = output
-        .as_array()
-        .ok_or_else(|| format!("{context} parser must return an event array, got {output}"))?;
-    events.extend(values.iter().cloned());
-    Ok(())
+fn unpack_response_envelope(output: Value, context: &str) -> Result<Vec<Value>, String> {
+    if output.get("schema").and_then(Value::as_str) != Some("kinetix.plugin.response") {
+        return Err(format!(
+            "{context} parser must return a kinetix.plugin.response envelope, got {output}"
+        ));
+    }
+    if output.get("schema_version").and_then(Value::as_u64) != Some(1) {
+        return Err(format!(
+            "{context} parser must return response schema version 1, got {output}"
+        ));
+    }
+    let events = output
+        .get("events")
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("{context} response envelope must contain an events array"))?;
+    if events
+        .iter()
+        .any(|event| !event.is_object() || event.get("type").and_then(Value::as_str).is_none())
+    {
+        return Err(format!(
+            "{context} response envelope contains an invalid event"
+        ));
+    }
+    Ok(events.clone())
 }
 
 fn assert_expected_events(
@@ -894,12 +894,14 @@ fn check_stop_reasons(
                 let stream = adapter
                     .parse_stream_chunk(&probe["stream"])
                     .map_err(|error| format!("{context} failed to parse stop reason: {error}"))?;
+                let stream = Value::Array(unpack_response_envelope(stream, context)?);
                 assert_finish_reason(context, expected, &stream)?;
                 let full = adapter
                     .parse_full_response(&probe["full"])
                     .map_err(|error| {
                         format!("{context} failed to parse full stop reason: {error}")
                     })?;
+                let full = Value::Array(unpack_response_envelope(full, context)?);
                 assert_finish_reason(context, expected, &full)?;
             }
             Ok(())

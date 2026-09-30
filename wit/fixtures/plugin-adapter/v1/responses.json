@@ -185,6 +185,7 @@
       "expected": {
         "request_id": "req_conformance",
         "thinking": "consider tools",
+        "thinking_signature": "sig-thinking",
         "text": "answer",
         "tools": [
           {"index": 2, "id": "call_weather", "name": "get_weather", "arguments": {"city": "Paris"}},

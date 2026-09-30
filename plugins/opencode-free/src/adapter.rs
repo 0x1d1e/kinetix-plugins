@@ -1288,9 +1288,17 @@ fn parse_responses(value: &Value) -> Vec<Value> {
     events
 }
 
+fn response_envelope(events: Vec<Value>) -> Value {
+    json!({
+        "schema": "kinetix.plugin.response",
+        "schema_version": 1,
+        "events": events,
+    })
+}
+
 pub fn parse_stream_chunk(data: &str) -> Result<String, AdapterError> {
     if data.trim().is_empty() || data.trim() == "[DONE]" {
-        return Ok("[]".into());
+        return Ok(response_envelope(Vec::new()).to_string());
     }
 
     let value: Value = serde_json::from_str(data)
@@ -1312,7 +1320,7 @@ pub fn parse_stream_chunk(data: &str) -> Result<String, AdapterError> {
     } else {
         parse_chat(&value)
     };
-    Ok(Value::Array(events).to_string())
+    Ok(response_envelope(events).to_string())
 }
 
 fn parse_anthropic_full(value: &Value) -> Result<Vec<Value>, AdapterError> {
@@ -1381,11 +1389,11 @@ pub fn parse_full_response(body_json: &str) -> Result<String, AdapterError> {
         .map_err(|e| err("protocol_error", format!("invalid response JSON: {e}")))?;
 
     if value.get("object").and_then(Value::as_str) == Some("chat.completion") {
-        return Ok(Value::Array(parse_chat(&value)).to_string());
+        return Ok(response_envelope(parse_chat(&value)).to_string());
     }
 
     if value.get("type").and_then(Value::as_str) == Some("message") {
-        return Ok(Value::Array(parse_anthropic_full(&value)?).to_string());
+        return Ok(response_envelope(parse_anthropic_full(&value)?).to_string());
     }
 
     if value.get("object").and_then(Value::as_str) == Some("response")
@@ -1472,7 +1480,7 @@ pub fn parse_full_response(body_json: &str) -> Result<String, AdapterError> {
             "stop"
         };
         events.push(json!({"type":"finish","reason":finish_reason}));
-        return Ok(Value::Array(events).to_string());
+        return Ok(response_envelope(events).to_string());
     }
 
     Err(err("protocol_error", "unsupported OpenCode response shape"))
@@ -1481,6 +1489,30 @@ pub fn parse_full_response(body_json: &str) -> Result<String, AdapterError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Keep event-focused tests concise while still checking the public envelope.
+    fn unpack_test_response(response: String) -> Result<String, AdapterError> {
+        let envelope: Value = serde_json::from_str(&response)
+            .map_err(|error| err("protocol_error", error.to_string()))?;
+        if envelope.get("schema").and_then(Value::as_str) != Some("kinetix.plugin.response")
+            || envelope.get("schema_version").and_then(Value::as_u64) != Some(1)
+        {
+            return Err(err("protocol_error", "invalid canonical response envelope"));
+        }
+        let events = envelope
+            .get("events")
+            .and_then(Value::as_array)
+            .ok_or_else(|| err("protocol_error", "response envelope has no events array"))?;
+        Ok(Value::Array(events.clone()).to_string())
+    }
+
+    fn parse_stream_chunk(data: &str) -> Result<String, AdapterError> {
+        unpack_test_response(super::parse_stream_chunk(data)?)
+    }
+
+    fn parse_full_response(data: &str) -> Result<String, AdapterError> {
+        unpack_test_response(super::parse_full_response(data)?)
+    }
 
     struct ConformanceAdapter;
 
