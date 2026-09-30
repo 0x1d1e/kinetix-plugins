@@ -11,7 +11,6 @@ use kinetix_plugin_sdk::{
     export, exports, kinetix,
     model_capabilities::{
         ModelCapabilitiesV3, ModelTransportCapability, ReasoningCapability, SupportCapability,
-        TransportFormat,
     },
 };
 use serde::Deserialize;
@@ -454,6 +453,7 @@ export!(Component with_types_in kinetix_plugin_sdk);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kinetix_plugin_sdk::model_capabilities::TransportFormat;
 
     #[test]
     fn adapter_export_reuses_upstream_session_for_a_stable_kinetix_session() {
