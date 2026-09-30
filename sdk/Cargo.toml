@@ -10,3 +10,6 @@ repository = "https://github.com/PrightCord/kinetix-plugins"
 wit-bindgen = "0.62"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+
+[dev-dependencies]
+wit-parser = "0.259"

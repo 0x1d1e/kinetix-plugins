@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kinetix.dev/schemas/plugin-manifest-v1.schema.json",
+  "title": "Kinetix plugin manifest v1",
+  "description": "Canonical shape of plugin.toml after TOML parsing. Host compatibility and permission policy remain host-owned.",
+  "type": "object",
+  "required": ["manifest_version", "id", "name", "version", "plugin_api", "provides", "permissions", "limits"],
+  "additionalProperties": false,
+  "properties": {
+    "manifest_version": { "const": 1 },
+    "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "name": { "type": "string", "minLength": 1 },
+    "version": { "$ref": "#/$defs/semver" },
+    "plugin_api": { "type": "string", "pattern": "^[1-9][0-9]*$", "description": "Plugin ABI major, encoded as a decimal string." },
+    "compatibility": { "$ref": "#/$defs/compatibility" },
+    "provides": { "$ref": "#/$defs/provides" },
+    "integrations": { "type": "array", "items": { "$ref": "#/$defs/integration" } },
+    "ui": { "$ref": "#/$defs/ui" },
+    "permissions": { "$ref": "#/$defs/permissions" },
+    "limits": { "$ref": "#/$defs/limits" },
+    "routing_facts_mode": { "enum": ["pure", "cached"] },
+    "routing_facts_refresh_ms": { "type": "integer", "minimum": 0 }
+  },
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$"
+    },
+    "stringList": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "min_host_version": { "$ref": "#/$defs/semver" },
+        "max_host_version": { "$ref": "#/$defs/semver" }
+      }
+    },
+    "provides": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "credential_strategies": { "$ref": "#/$defs/stringList" },
+        "auth_flows": { "$ref": "#/$defs/stringList" },
+        "model_sources": { "$ref": "#/$defs/stringList" },
+        "account_model_sources": { "$ref": "#/$defs/stringList" },
+        "provider_adapters": { "$ref": "#/$defs/stringList" },
+        "health_probes": { "$ref": "#/$defs/stringList" },
+        "routing_facts": { "$ref": "#/$defs/stringList" },
+        "hooks": { "$ref": "#/$defs/stringList" },
+        "thinking_translation": { "type": "boolean" }
+      }
+    },
+    "integration": {
+      "type": "object",
+      "required": ["id", "name", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "credential_mode": { "enum": ["none", "manual", "auth_flow"] },
+        "provider_adapter": { "type": "string", "minLength": 1 },
+        "credential_strategy": { "type": "string", "minLength": 1 },
+        "auth_flow": { "type": "string", "minLength": 1 },
+        "model_source": { "type": "string", "minLength": 1 },
+        "features": { "$ref": "#/$defs/features" },
+        "protocols": { "$ref": "#/$defs/protocols" },
+        "provider": { "$ref": "#/$defs/provider" }
+      }
+    },
+    "features": {
+      "type": "object",
+      "required": ["schema_version", "streaming", "tools", "parallel_tools", "vision", "reasoning", "structured_output", "model_discovery", "quota_probe", "health_probe"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": { "const": 1 },
+        "streaming": { "type": "boolean" },
+        "tools": { "type": "boolean" },
+        "parallel_tools": { "type": "boolean" },
+        "vision": { "type": "boolean" },
+        "reasoning": { "type": "boolean" },
+        "structured_output": { "type": "boolean" },
+        "model_discovery": { "type": "boolean" },
+        "quota_probe": { "type": "boolean" },
+        "health_probe": { "type": "boolean" }
+      }
+    },
+    "protocols": {
+      "type": "object",
+      "required": ["input", "upstream"],
+      "additionalProperties": false,
+      "properties": {
+        "input": { "type": "array", "items": { "$ref": "#/$defs/protocol" }, "uniqueItems": true },
+        "upstream": { "type": "array", "items": { "$ref": "#/$defs/protocol" }, "uniqueItems": true }
+      }
+    },
+    "protocol": { "enum": ["openai-chat", "openai-responses", "anthropic", "gemini", "plugin-native"] },
+    "provider": {
+      "type": "object",
+      "required": ["base_url", "wire_format", "auth_scheme", "timeout_ms", "capability_mode", "follow_redirects"],
+      "additionalProperties": false,
+      "properties": {
+        "base_url": { "type": "string", "pattern": "^https://" },
+        "wire_format": { "enum": ["openai", "anthropic", "gemini", "plugin"] },
+        "auth_scheme": { "enum": ["bearer", "custom_header", "query_param"] },
+        "custom_header_name": { "type": "string", "minLength": 1 },
+        "custom_param_name": { "type": "string", "minLength": 1 },
+        "extra_headers": { "type": "object", "additionalProperties": { "type": "string" } },
+        "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 600000 },
+        "capability_mode": { "enum": ["permissive", "strict"] },
+        "models_path": { "type": "string", "pattern": "^/" },
+        "follow_redirects": { "type": "boolean" },
+        "credential_hosts": { "$ref": "#/$defs/stringList" },
+        "pricing_scope": { "type": "string" }
+      }
+    },
+    "ui": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "actions": { "type": "array", "items": { "$ref": "#/$defs/uiAction" } },
+        "settings": { "type": "array", "items": { "$ref": "#/$defs/uiSetting" } }
+      }
+    },
+    "uiAction": {
+      "type": "object",
+      "required": ["id", "label", "kind", "integration", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 },
+        "kind": { "const": "auth" },
+        "integration": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" }
+      }
+    },
+    "uiSetting": {
+      "type": "object",
+      "required": ["key", "label", "kind"],
+      "additionalProperties": false,
+      "properties": {
+        "key": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["text", "secret", "boolean", "select"] },
+        "description": { "type": "string" },
+        "required": { "type": "boolean" },
+        "options": { "$ref": "#/$defs/stringList" },
+        "default": { "type": "string" }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "required": ["network_hosts", "credential_scopes", "credential_read"],
+      "additionalProperties": false,
+      "properties": {
+        "network_hosts": { "$ref": "#/$defs/stringList" },
+        "credential_scopes": { "$ref": "#/$defs/stringList" },
+        "credential_read": { "type": "boolean" }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "required": ["memory", "wall_time_ms", "max_outbound_requests", "max_http_body", "storage"],
+      "additionalProperties": false,
+      "properties": {
+        "memory": { "type": "string", "minLength": 1 },
+        "wall_time_ms": { "type": "integer", "minimum": 1 },
+        "max_outbound_requests": { "type": "integer", "minimum": 0 },
+        "max_http_body": { "type": "string", "minLength": 1 },
+        "storage": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

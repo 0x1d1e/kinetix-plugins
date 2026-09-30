@@ -26,7 +26,12 @@ PROTOCOLS = {"input": ["openai-chat"], "upstream": ["plugin-native"]}
 
 
 def manifest(features=None, protocols=None):
-    integration = {"id": "test", "model_source": "test-models"}
+    integration = {
+        "id": "test",
+        "name": "Test integration",
+        "description": "Fixture integration",
+        "model_source": "test-models",
+    }
     if features is not None:
         integration["features"] = features
         integration["protocols"] = protocols
@@ -36,7 +41,16 @@ def manifest(features=None, protocols=None):
         "name": "Test",
         "version": "0.1.0",
         "plugin_api": "1",
+        "provides": {"model_sources": ["test-models"]},
         "integrations": [integration],
+        "permissions": {"network_hosts": [], "credential_scopes": [], "credential_read": False},
+        "limits": {
+            "memory": "32MiB",
+            "wall_time_ms": 1000,
+            "max_outbound_requests": 0,
+            "max_http_body": "1KiB",
+            "storage": "1KiB",
+        },
     }
 
 
@@ -87,6 +101,22 @@ class ManifestValidationTests(unittest.TestCase):
     def test_feature_and_protocol_blocks_must_be_paired(self):
         with self.assertRaises(ValueError):
             validate_manifest(self.path, manifest(FEATURES))
+
+    def test_schema_rejects_unknown_fields_and_missing_permissions(self):
+        changed = manifest()
+        changed["extra"] = True
+        with self.assertRaises(ValueError):
+            validate_manifest(self.path, changed)
+
+        changed = manifest()
+        del changed["permissions"]
+        with self.assertRaises(ValueError):
+            validate_manifest(self.path, changed)
+
+    def test_host_compatibility_remains_host_owned(self):
+        changed = manifest()
+        changed["plugin_api"] = "99"
+        self.assertEqual(validate_manifest(self.path, changed), "dev.kinetix.test")
 
 
 if __name__ == "__main__":

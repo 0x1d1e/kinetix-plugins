@@ -36,7 +36,10 @@ jobs:
         run: |
           python3 -m json.tool catalog.json >/dev/null
           python3 -m json.tool trusted-publishers.json >/dev/null
-      - name: Validate plugin manifests
+      - name: Validate plugin metadata and package contract
         run: |
           python3 scripts/test_validate_manifests.py
           python3 scripts/validate_manifests.py
+          python3 scripts/test_validate_packages.py
+          python3 scripts/test_validate_catalog.py
+          python3 scripts/validate_catalog.py

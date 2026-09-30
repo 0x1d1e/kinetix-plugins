@@ -11,3 +11,9 @@ fn all_v1_wit_copies_match_the_canonical_abi() {
         canonical
     );
 }
+
+#[test]
+fn sdk_v2_wit_copy_matches_the_canonical_abi() {
+    let canonical = include_str!("../../wit/v2/kinetix-plugin.wit");
+    assert_eq!(include_str!("../wit-v2/kinetix-plugin.wit"), canonical);
+}

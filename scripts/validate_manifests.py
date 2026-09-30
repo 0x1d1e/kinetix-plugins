@@ -1,25 +1,21 @@
 #!/usr/bin/env python3
-"""Validate plugin manifests and the versioned integration feature contract."""
+"""Validate plugin.toml against the canonical v1 manifest schema."""
 
 from __future__ import annotations
 
+import argparse
+import json
 import pathlib
+import re
 import sys
 import tomllib
 
-REQUIRED = {"manifest_version", "id", "name", "version", "plugin_api"}
-FEATURES = {
-    "streaming",
-    "tools",
-    "parallel_tools",
-    "vision",
-    "reasoning",
-    "structured_output",
-    "model_discovery",
-    "quota_probe",
-    "health_probe",
-}
-PROTOCOLS = {"openai-chat", "openai-responses", "anthropic", "gemini", "plugin-native"}
+from jsonschema import Draft202012Validator
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+SCHEMA_PATH = ROOT / "schemas/plugin-manifest-v1.schema.json"
+SCHEMA = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+VALIDATOR = Draft202012Validator(SCHEMA)
 
 
 def require(condition: bool, path: pathlib.Path, message: str) -> None:
@@ -27,77 +23,114 @@ def require(condition: bool, path: pathlib.Path, message: str) -> None:
         raise ValueError(f"{path}: {message}")
 
 
-def validate_integration(path: pathlib.Path, integration: object) -> None:
-    require(isinstance(integration, dict), path, "integrations entries must be tables")
-    assert isinstance(integration, dict)
-    features = integration.get("features")
-    protocols = integration.get("protocols")
-    require(
-        (features is None) == (protocols is None),
-        path,
-        "integrations.features and integrations.protocols must be declared together",
-    )
-    if features is None:
-        return
-
-    require(isinstance(features, dict), path, "integrations.features must be a table")
-    assert isinstance(features, dict)
-    require(
-        features.get("schema_version") == 1 and type(features.get("schema_version")) is int,
-        path,
-        "integrations.features.schema_version must be 1",
-    )
-    unknown_features = features.keys() - FEATURES - {"schema_version"}
-    missing_features = FEATURES - features.keys()
-    require(not unknown_features, path, f"unknown integration features: {sorted(unknown_features)}")
-    require(not missing_features, path, f"missing integration features: {sorted(missing_features)}")
-    for name in FEATURES:
-        require(type(features[name]) is bool, path, f"integrations.features.{name} must be a boolean")
-    require(
-        not features["parallel_tools"] or features["tools"],
-        path,
-        "parallel_tools requires tools",
-    )
-    has_model_source = bool(integration.get("model_source"))
-    require(
-        features["model_discovery"] == has_model_source,
-        path,
-        "model_discovery must match whether model_source is declared",
-    )
-
-    require(isinstance(protocols, dict), path, "integrations.protocols must be a table")
-    assert isinstance(protocols, dict)
-    require(
-        protocols.keys() == {"input", "upstream"},
-        path,
-        "integrations.protocols must contain only input and upstream",
-    )
-    for name in ("input", "upstream"):
-        values = protocols[name]
-        require(isinstance(values, list), path, f"integrations.protocols.{name} must be an array")
-        require(
-            all(isinstance(value, str) and value in PROTOCOLS for value in values),
-            path,
-            f"integrations.protocols.{name} contains an unknown protocol",
-        )
-        require(
-            len(values) == len(set(values)),
-            path,
-            f"integrations.protocols.{name} must not contain duplicates",
-        )
-
-
 def validate_manifest(path: pathlib.Path, data: object) -> str:
-    require(isinstance(data, dict), path, "manifest root must be a table")
+    errors = sorted(VALIDATOR.iter_errors(data), key=lambda error: list(map(str, error.absolute_path)))
+    if errors:
+        error = errors[0]
+        location = ".".join(map(str, error.absolute_path)) or "manifest"
+        raise ValueError(f"{path}: {location}: {error.message}")
+
     assert isinstance(data, dict)
-    missing = REQUIRED - data.keys()
-    require(not missing, path, f"missing required keys: {sorted(missing)}")
-    require(data["manifest_version"] == 1, path, "manifest_version must be 1")
+    plugin_id = data["id"]
+    require(
+        re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,126}[a-z0-9]|[a-z0-9]", plugin_id) is not None,
+        path,
+        "id must contain lowercase letters, digits, '.', '-', or '_'",
+    )
+    require(".." not in plugin_id and not plugin_id.startswith(".") and not plugin_id.endswith("."),
+            path, "id has invalid dot placement")
+
+    provides = data.get("provides", {})
     integrations = data.get("integrations", [])
-    require(isinstance(integrations, list), path, "integrations must be an array of tables")
+    integration_ids: set[str] = set()
+    capability_keys = {
+        "provider_adapter": "provider_adapters",
+        "credential_strategy": "credential_strategies",
+        "auth_flow": "auth_flows",
+        "model_source": None,
+    }
     for integration in integrations:
-        validate_integration(path, integration)
-    return data["id"]
+        integration_id = integration["id"]
+        require(integration_id not in integration_ids, path, f"duplicate integration id {integration_id}")
+        integration_ids.add(integration_id)
+
+        features = integration.get("features")
+        protocols = integration.get("protocols")
+        require(
+            (features is None) == (protocols is None),
+            path,
+            "integrations.features and integrations.protocols must be declared together",
+        )
+        if features is not None:
+            require(
+                not features["parallel_tools"] or features["tools"],
+                path,
+                "parallel_tools requires tools",
+            )
+            require(
+                features["model_discovery"] == bool(integration.get("model_source")),
+                path,
+                f"integration {integration_id}: model_discovery must match model_source",
+            )
+
+        for field, provided_key in capability_keys.items():
+            name = integration.get(field)
+            if not name:
+                continue
+            if field == "model_source":
+                names = provides.get("model_sources", []) + provides.get("account_model_sources", [])
+                require(name in names, path, f"integration {integration_id} references unprovided model_source {name}")
+            elif provided_key:
+                require(
+                    name in provides.get(provided_key, []),
+                    path,
+                    f"integration {integration_id} references unprovided {field} {name}",
+                )
+
+        mode = integration.get("credential_mode")
+        if mode == "auth_flow":
+            require(
+                bool(integration.get("auth_flow")) and bool(integration.get("credential_strategy")),
+                path,
+                f"integration {integration_id}: auth_flow credential mode requires auth_flow and credential_strategy",
+            )
+        elif mode == "none":
+            require(
+                not integration.get("auth_flow") and not integration.get("credential_strategy"),
+                path,
+                f"integration {integration_id}: none credential mode cannot declare auth_flow or credential_strategy",
+            )
+        elif mode == "manual":
+            require(
+                not integration.get("auth_flow"),
+                path,
+                f"integration {integration_id}: manual credential mode cannot declare auth_flow",
+            )
+
+    return plugin_id
+
+
+def validate_plugin_directory(plugin_dir: pathlib.Path) -> tuple[str, str, str]:
+    manifest_path = plugin_dir / "plugin.toml"
+    cargo_path = plugin_dir / "Cargo.toml"
+    try:
+        manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
+        cargo = tomllib.loads(cargo_path.read_text(encoding="utf-8"))
+        plugin_id = validate_manifest(manifest_path, manifest)
+    except (OSError, tomllib.TOMLDecodeError, ValueError) as error:
+        raise ValueError(f"{plugin_dir}: {error}") from error
+
+    package = cargo.get("package")
+    require(isinstance(package, dict), cargo_path, "[package] table is required")
+    crate_version = package.get("version")
+    require(isinstance(crate_version, str), cargo_path, "[package].version must be a string")
+    manifest_version = manifest["version"]
+    require(
+        crate_version == manifest_version,
+        manifest_path,
+        f"plugin.toml version ({manifest_version}) does not match Cargo.toml version ({crate_version})",
+    )
+    return plugin_id, manifest_version, package.get("name", "")
 
 
 def validate_directory(root: pathlib.Path) -> int:
@@ -105,25 +138,33 @@ def validate_directory(root: pathlib.Path) -> int:
     if not manifests:
         raise ValueError(f"{root}: no plugin manifests found")
     ids = set()
-    for path in manifests:
-        try:
-            data = tomllib.loads(path.read_text())
-            plugin_id = validate_manifest(path, data)
-        except (OSError, tomllib.TOMLDecodeError, ValueError) as error:
-            raise ValueError(f"{path}: {error}") from error
-        require(plugin_id not in ids, path, f"duplicate plugin id {plugin_id}")
+    for manifest_path in manifests:
+        plugin_id, _, _ = validate_plugin_directory(manifest_path.parent)
+        require(plugin_id not in ids, manifest_path, f"duplicate plugin id {plugin_id}")
         ids.add(plugin_id)
     return len(manifests)
 
 
 def main() -> int:
-    root = pathlib.Path(__file__).resolve().parent.parent
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=pathlib.Path, default=ROOT, help="repository root")
+    parser.add_argument("--plugin-dir", type=pathlib.Path, help="validate one plugin directory")
+    parser.add_argument("--print-fields", action="store_true", help="print id, version, and crate name as TSV")
+    args = parser.parse_args()
+
     try:
-        count = validate_directory(root)
+        if args.plugin_dir:
+            plugin_id, version, crate_name = validate_plugin_directory(args.plugin_dir)
+            if args.print_fields:
+                print(f"{plugin_id}\t{version}\t{crate_name}")
+            else:
+                print(f"validated {plugin_id} {version}")
+        else:
+            count = validate_directory(args.root)
+            print(f"validated {count} plugin manifest(s)")
     except ValueError as error:
         print(error, file=sys.stderr)
         return 1
-    print(f"validated {count} plugin manifest(s)")
     return 0
 
 

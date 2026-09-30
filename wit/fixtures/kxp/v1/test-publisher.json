@@ -1,0 +1,7 @@
+{
+  "id": "fixture-only-ed25519-v1",
+  "publisher": "Kinetix package fixture only",
+  "algorithm": "ed25519",
+  "public_key_base64": "H4D1VzfKOkq7+m8vigqmdTw92XhFvStXuMbb0mRyKpk=",
+  "enabled": true
+}

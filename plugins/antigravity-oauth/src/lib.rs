@@ -2090,7 +2090,7 @@ impl exports::hooks::Guest for Component {
 // authorization, and discovery exports remain API v1.
 
 use adapter_world::exports::kinetix::plugin2_0_0::provider_adapter::Guest as ProviderAdapterGuest;
-use adapter_world::kinetix::plugin1_0_0::host_storage;
+use kinetix::plugin::host_storage;
 use kinetix_plugin_sdk::adapter_v2 as adapter_world;
 
 type AdapterPluginError = adapter_world::kinetix::plugin1_0_0::types::PluginError;
