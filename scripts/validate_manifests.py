@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import pathlib
 import re
 import sys
 import tomllib
+import urllib.parse
 
 from jsonschema import Draft202012Validator
 
@@ -42,6 +44,227 @@ def validate_semver_component_bounds(path: pathlib.Path, data: dict) -> None:
             )
 
 
+def _semver_precedence(version: str) -> tuple:
+    without_build = version.split("+", 1)[0]
+    core, separator, prerelease = without_build.partition("-")
+    core_parts = tuple(int(part) for part in core.split("."))
+    if not separator:
+        return core_parts, 1, ()
+    identifiers = tuple(
+        (0, int(part)) if part.isdigit() else (1, part)
+        for part in prerelease.split(".")
+    )
+    return core_parts, 0, identifiers
+
+
+def validate_byte_size(path: pathlib.Path, field: str, value: str) -> None:
+    units = {
+        "GiB": 1024**3,
+        "MiB": 1024**2,
+        "KiB": 1024,
+        "GB": 1_000_000_000,
+        "MB": 1_000_000,
+        "KB": 1_000,
+        "B": 1,
+    }
+    size = value.strip()
+    multiplier = 1
+    for suffix, factor in units.items():
+        if size.endswith(suffix):
+            size = size[: -len(suffix)].strip()
+            multiplier = factor
+            break
+    require(re.fullmatch(r"\+?[0-9]+", size) is not None, path, f"limits.{field} is not a valid byte size")
+    require(int(size) <= (2**64 - 1) // multiplier, path, f"limits.{field} exceeds the host u64 byte-size range")
+
+
+def validate_network_host(path: pathlib.Path, value: str) -> None:
+    host = value.strip()
+    require(bool(host), path, "network host must not be empty")
+    require(host != "*" and ("*" not in host or host.startswith("*.")), path, f"network host {host!r} has an invalid wildcard")
+    base = host[2:] if host.startswith("*.") else host
+    require("*" not in base and bool(base) and "/" not in base and " " not in base, path, f"network host {host!r} is invalid")
+    try:
+        ipaddress.ip_address(base)
+    except ValueError:
+        pass
+    else:
+        raise ValueError(f"{path}: network host {host!r}: IP literals are not allowed; declare a hostname")
+
+
+def validate_provider_template(path: pathlib.Path, integration: dict, provided: dict) -> None:
+    provider = integration.get("provider")
+    if provider is None:
+        return
+    label = f"integration {integration['id']} provider"
+    base_url = provider["base_url"]
+    try:
+        parsed = urllib.parse.urlsplit(base_url)
+        hostname = parsed.hostname
+        _ = parsed.port
+    except ValueError as error:
+        raise ValueError(f"{path}: {label} base_url is invalid: {error}") from error
+    require(parsed.scheme.lower() == "https", path, f"{label} base_url must use https")
+    require(hostname is not None, path, f"{label} base_url has no host")
+    require(parsed.username in (None, "") and parsed.password is None, path, f"{label} base_url may not contain userinfo")
+    require(not any(character.isspace() for character in hostname), path, f"{label} base_url has an invalid host")
+    try:
+        hostname.encode("idna")
+    except UnicodeError as error:
+        raise ValueError(f"{path}: {label} base_url has an invalid host: {error}") from error
+
+    wire_format = provider["wire_format"]
+    adapter = integration.get("provider_adapter")
+    require(not adapter or wire_format == "plugin", path, f"integration {integration['id']} provider_adapter requires wire_format 'plugin'")
+    require(wire_format != "plugin" or bool(adapter), path, f"integration {integration['id']} provider wire_format 'plugin' requires provider_adapter")
+    protocols = integration.get("protocols")
+    if protocols is not None:
+        compatible = {
+            "openai-chat": "openai",
+            "openai-responses": "openai",
+            "anthropic": "anthropic",
+            "gemini": "gemini",
+            "plugin-native": "plugin",
+        }
+        for protocol in protocols["upstream"]:
+            require(compatible[protocol] == wire_format, path, f"integration {integration['id']} upstream protocol {protocol!r} is incompatible with provider wire_format {wire_format!r}")
+
+    auth_scheme = provider["auth_scheme"]
+    if auth_scheme == "custom_header":
+        require(bool(provider.get("custom_header_name", "").strip()), path, f"{label} custom_header auth requires custom_header_name")
+    elif auth_scheme == "query_param":
+        require(bool(provider.get("custom_param_name", "").strip()), path, f"{label} query_param auth requires custom_param_name")
+    if provider.get("models_path") is not None:
+        models_path = provider["models_path"]
+        require(models_path.startswith("/") and "://" not in models_path, path, f"{label} models_path must be an absolute URL path")
+    for host in provider.get("credential_hosts", []):
+        require(bool(host.strip()) and not any(character in host for character in "/:* "), path, f"{label} credential host {host!r} is invalid")
+    for name, value in provider.get("extra_headers", {}).items():
+        require(bool(name.strip()) and not any(character in name for character in "\r\n:") and not any(character in value for character in "\r\n"), path, f"{label} contains an invalid extra header")
+
+
+def validate_source_semantics(path: pathlib.Path, data: dict) -> None:
+    require(bool(data["name"].strip()), path, "manifest name must not be empty")
+    plugin_id = data["id"]
+    require(not plugin_id.startswith(".") and not plugin_id.endswith(".") and ".." not in plugin_id, path, "id has invalid dot placement")
+
+    compatibility = data.get("compatibility", {})
+    minimum = compatibility.get("min_host_version")
+    maximum = compatibility.get("max_host_version")
+    if minimum is not None and maximum is not None:
+        require(_semver_precedence(minimum) <= _semver_precedence(maximum), path, "compatibility.min_host_version must not exceed max_host_version")
+
+    for field in ("memory", "max_http_body", "storage"):
+        validate_byte_size(path, field, data["limits"][field])
+
+    provides = data["provides"]
+    capability_keys = (
+        "credential_strategies", "auth_flows", "model_sources", "account_model_sources",
+        "provider_adapters", "health_probes", "routing_facts", "hooks",
+    )
+    require(any(provides.get(key) for key in capability_keys), path, "manifest provides no capabilities")
+    require(not provides.get("thinking_translation") or bool(provides.get("provider_adapters")), path, "provides.thinking_translation requires at least one provider_adapter")
+    allowed_hooks = {"on_request_normalized", "on_target_candidate", "on_usage_finalized"}
+    require(set(provides.get("hooks", [])) <= allowed_hooks, path, "provides.hooks contains an unknown hook")
+
+    provided = {key: set(provides.get(key, [])) for key in capability_keys}
+    integration_ids: set[str] = set()
+    for integration in data.get("integrations", []):
+        integration_id = integration["id"]
+        require(integration_id not in integration_ids, path, f"duplicate integration id {integration_id}")
+        integration_ids.add(integration_id)
+        require(bool(integration["name"].strip()), path, f"integration {integration_id} name must not be empty")
+
+        features = integration.get("features")
+        protocols = integration.get("protocols")
+        require((features is None) == (protocols is None), path, "integrations.features and integrations.protocols must be declared together")
+        if features is not None:
+            require(not features["parallel_tools"] or features["tools"], path, "parallel_tools requires tools")
+            require(features["model_discovery"] == bool(integration.get("model_source")), path, f"integration {integration_id}: model_discovery must match model_source")
+
+        bindings = {
+            "provider_adapter": "provider_adapters",
+            "credential_strategy": "credential_strategies",
+            "auth_flow": "auth_flows",
+        }
+        require(any(integration.get(key) for key in (*bindings, "model_source")), path, f"integration {integration_id} must reference at least one provided capability")
+        for field, provided_key in bindings.items():
+            name = integration.get(field)
+            if name:
+                require(name in provided[provided_key], path, f"integration {integration_id} references unprovided {field} {name}")
+        model_source = integration.get("model_source")
+        if model_source:
+            legacy = model_source in provided["model_sources"]
+            account = model_source in provided["account_model_sources"]
+            require(legacy or account, path, f"integration {integration_id} references unprovided model_source {model_source}")
+            require(not (legacy and account), path, f"integration {integration_id} model_source {model_source!r} is declared as both legacy and account-aware")
+
+        mode = integration.get("credential_mode")
+        if mode == "auth_flow":
+            require(bool(integration.get("auth_flow")) and bool(integration.get("credential_strategy")), path, f"integration {integration_id}: auth_flow credential mode requires auth_flow and credential_strategy")
+        elif mode == "none":
+            require(not integration.get("auth_flow") and not integration.get("credential_strategy"), path, f"integration {integration_id}: none credential mode cannot declare auth_flow or credential_strategy")
+        elif mode == "manual":
+            require(not integration.get("auth_flow"), path, f"integration {integration_id}: manual credential mode cannot declare auth_flow")
+
+        validate_provider_template(path, integration, provided)
+
+    ui = data.get("ui", {})
+    setting_keys: set[str] = set()
+    for setting in ui.get("settings", []):
+        key = setting["key"]
+        require(key not in setting_keys, path, f"duplicate ui setting key {key}")
+        setting_keys.add(key)
+        require(bool(setting["label"].strip()), path, f"ui setting {key!r} label must not be empty")
+        options = setting.get("options", [])
+        require(setting["kind"] == "select" or not options, path, f"ui setting {key!r} options are only valid for select settings")
+        if setting["kind"] == "select":
+            require(bool(options), path, f"select ui setting {key!r} requires options")
+            require(all(options), path, f"ui setting {key!r} has an empty option")
+            if "default" in setting:
+                require(setting["default"] in options, path, f"ui setting {key!r} default is not in options")
+        if setting["kind"] == "boolean" and "default" in setting:
+            require(setting["default"] in ("true", "false"), path, f"boolean ui setting {key!r} default must be 'true' or 'false'")
+        require(setting["kind"] != "secret" or "default" not in setting, path, f"secret ui setting {key!r} may not declare a default")
+
+    action_ids: set[str] = set()
+    for action in ui.get("actions", []):
+        action_id = action["id"]
+        require(action_id not in action_ids, path, f"duplicate ui action id {action_id}")
+        action_ids.add(action_id)
+        require(bool(action["label"].strip()), path, f"ui action {action_id!r} label must not be empty")
+        integration = next((item for item in data.get("integrations", []) if item["id"] == action["integration"]), None)
+        require(integration is not None, path, f"ui action {action_id!r} references unknown integration {action['integration']!r}")
+        require(bool(integration.get("auth_flow")) and bool(integration.get("credential_strategy")), path, f"auth ui action {action_id!r} requires integration {integration['id']!r} to declare auth_flow and credential_strategy")
+
+    network_hosts: set[str] = set()
+    for host in data["permissions"]["network_hosts"]:
+        validate_network_host(path, host)
+        require(host not in network_hosts, path, f"duplicate network_hosts entry {host!r}")
+        network_hosts.add(host)
+
+    credential_scopes: set[str] = set()
+    for scope in data["permissions"]["credential_scopes"]:
+        require(scope not in credential_scopes, path, f"duplicate credential_scopes entry {scope!r}")
+        credential_scopes.add(scope)
+        if scope == "*":
+            continue
+        if scope.startswith("provider:"):
+            require(bool(scope.removeprefix("provider:").strip()), path, "credential scope 'provider:' requires a provider id")
+        elif scope.startswith("credential_strategy:"):
+            strategy = scope.removeprefix("credential_strategy:")
+            require(strategy in provided["credential_strategies"], path, f"credential scope {scope!r} references a credential strategy this plugin does not provide")
+        else:
+            raise ValueError(f"{path}: invalid credential scope {scope!r}: expected '*', 'provider:<id>', or 'credential_strategy:<name>'")
+
+    if provides.get("routing_facts"):
+        mode = data.get("routing_facts_mode", "pure")
+        require(mode in ("pure", "cached"), path, f"invalid routing_facts_mode {mode!r}: expected 'pure' or 'cached'")
+        if mode == "cached":
+            refresh = data.get("routing_facts_refresh_ms", 30_000)
+            require(5_000 <= refresh <= 3_600_000, path, "routing_facts_refresh_ms must be 5000..=3600000 for cached routing facts")
+
+
 def validate_manifest(path: pathlib.Path, data: object) -> str:
     errors = sorted(VALIDATOR.iter_errors(data), key=lambda error: list(map(str, error.absolute_path)))
     if errors:
@@ -51,83 +274,8 @@ def validate_manifest(path: pathlib.Path, data: object) -> str:
 
     assert isinstance(data, dict)
     validate_semver_component_bounds(path, data)
-    plugin_id = data["id"]
-    require(
-        re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,126}[a-z0-9]|[a-z0-9]", plugin_id) is not None,
-        path,
-        "id must contain lowercase letters, digits, '.', '-', or '_'",
-    )
-    require(".." not in plugin_id and not plugin_id.startswith(".") and not plugin_id.endswith("."),
-            path, "id has invalid dot placement")
-
-    provides = data.get("provides", {})
-    integrations = data.get("integrations", [])
-    integration_ids: set[str] = set()
-    capability_keys = {
-        "provider_adapter": "provider_adapters",
-        "credential_strategy": "credential_strategies",
-        "auth_flow": "auth_flows",
-        "model_source": None,
-    }
-    for integration in integrations:
-        integration_id = integration["id"]
-        require(integration_id not in integration_ids, path, f"duplicate integration id {integration_id}")
-        integration_ids.add(integration_id)
-
-        features = integration.get("features")
-        protocols = integration.get("protocols")
-        require(
-            (features is None) == (protocols is None),
-            path,
-            "integrations.features and integrations.protocols must be declared together",
-        )
-        if features is not None:
-            require(
-                not features["parallel_tools"] or features["tools"],
-                path,
-                "parallel_tools requires tools",
-            )
-            require(
-                features["model_discovery"] == bool(integration.get("model_source")),
-                path,
-                f"integration {integration_id}: model_discovery must match model_source",
-            )
-
-        for field, provided_key in capability_keys.items():
-            name = integration.get(field)
-            if not name:
-                continue
-            if field == "model_source":
-                names = provides.get("model_sources", []) + provides.get("account_model_sources", [])
-                require(name in names, path, f"integration {integration_id} references unprovided model_source {name}")
-            elif provided_key:
-                require(
-                    name in provides.get(provided_key, []),
-                    path,
-                    f"integration {integration_id} references unprovided {field} {name}",
-                )
-
-        mode = integration.get("credential_mode")
-        if mode == "auth_flow":
-            require(
-                bool(integration.get("auth_flow")) and bool(integration.get("credential_strategy")),
-                path,
-                f"integration {integration_id}: auth_flow credential mode requires auth_flow and credential_strategy",
-            )
-        elif mode == "none":
-            require(
-                not integration.get("auth_flow") and not integration.get("credential_strategy"),
-                path,
-                f"integration {integration_id}: none credential mode cannot declare auth_flow or credential_strategy",
-            )
-        elif mode == "manual":
-            require(
-                not integration.get("auth_flow"),
-                path,
-                f"integration {integration_id}: manual credential mode cannot declare auth_flow",
-            )
-
-    return plugin_id
+    validate_source_semantics(path, data)
+    return data["id"]
 
 
 def validate_plugin_directory(plugin_dir: pathlib.Path) -> tuple[str, str, str]:
