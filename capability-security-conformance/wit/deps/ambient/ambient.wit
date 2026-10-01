@@ -1,0 +1,9 @@
+package kinetix:ambient;
+
+interface process-shell {
+  exec: func(command: string) -> u32;
+}
+
+interface system-credentials {
+  read: func(name: string) -> string;
+}

@@ -167,6 +167,52 @@ fn v1_plugin_world_exposes_mechanisms_not_execution_policy() {
 }
 
 #[test]
+fn v1_host_surface_contains_only_the_security_contract_capabilities() {
+    let (resolve, package) = parse_v1();
+    let supported = names(&[
+        "host-http",
+        "host-storage",
+        "host-log",
+        "host-credential",
+        "host-clock",
+    ]);
+    let interfaces = &resolve.packages[package].interfaces;
+    assert_eq!(
+        interfaces
+            .keys()
+            .filter(|name| name.starts_with("host-"))
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        supported
+    );
+    for (name, operations) in [
+        ("host-http", &["send"][..]),
+        ("host-storage", &["get", "put", "delete", "cache-set"][..]),
+        ("host-log", &["log"][..]),
+        ("host-credential", &["sign", "lease", "read"][..]),
+        ("host-clock", &["now-unix-seconds", "now-unix-millis"][..]),
+    ] {
+        assert_eq!(
+            resolve.interfaces[interfaces[name]]
+                .functions
+                .keys()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            names(operations),
+            "capability {name} requires a security contract update"
+        );
+    }
+    let mut allowed_imports = supported;
+    allowed_imports.insert("types".into());
+    for (name, id) in &resolve.packages[package].worlds {
+        assert!(
+            item_names(&resolve, resolve.worlds[*id].imports.iter()).is_subset(&allowed_imports),
+            "world {name} imports authority outside the security contract"
+        );
+    }
+}
+
+#[test]
 fn auxiliary_worlds_expose_provider_operations_only() {
     let (resolve, package) = parse_v1();
     for (world_name, interface_name, operations) in [

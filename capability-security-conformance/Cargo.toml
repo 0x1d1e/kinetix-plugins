@@ -1,0 +1,23 @@
+[package]
+name = "kinetix-plugin-security-fixture"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+filesystem = ["ambient"]
+host-paths = ["ambient"]
+process-shell = ["ambient"]
+environment = ["ambient"]
+raw-sockets = ["ambient"]
+arbitrary-network = ["ambient"]
+system-credentials = ["ambient"]
+randomness = ["ambient"]
+ambient = []
+
+[dependencies]
+wit-bindgen = "0.62"
+serde_json = "1"

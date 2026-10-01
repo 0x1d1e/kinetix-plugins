@@ -3,6 +3,7 @@ name = "kinetix-plugin-component-runtime-conformance"
 version = "0.1.0"
 edition = "2021"
 publish = false
+default-run = "adapter-runtime-conformance"
 
 [features]
 runtime = ["dep:wasmtime"]
@@ -15,4 +16,9 @@ wasmtime = { version = "48.0.3", optional = true, default-features = false, feat
 [[bin]]
 name = "adapter-runtime-conformance"
 path = "src/main.rs"
+required-features = ["runtime"]
+
+[[bin]]
+name = "security-fixture-smoke"
+path = "src/security.rs"
 required-features = ["runtime"]
