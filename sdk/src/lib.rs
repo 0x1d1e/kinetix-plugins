@@ -68,12 +68,22 @@ pub mod adapter {
     });
 }
 
-/// Bindings for the session-aware plugin API v2 `plugin-adapter` world.
-/// Other plugin capabilities and host imports remain defined by API v1.
+/// Bindings for the legacy session-aware API v2 adapter world, which retains
+/// its API v1 host imports for compatibility.
 pub mod adapter_v2 {
     wit_bindgen::generate!({
         path: "wit-v2",
         world: "plugin-adapter-v2",
+        pub_export_macro: true,
+        generate_all,
+    });
+}
+
+/// Bindings for the import-free, session-aware API v3 adapter world.
+pub mod adapter_v3 {
+    wit_bindgen::generate!({
+        path: "wit-v3",
+        world: "plugin-adapter-v3",
         pub_export_macro: true,
         generate_all,
     });

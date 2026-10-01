@@ -86,6 +86,8 @@ fn default_client_secret() -> String {
 const REFRESH_LEAD_MS: u64 = 5 * 60 * 1000;
 /// KV key prefix where the live access token is written for the host.
 const LEASE_KEY_PREFIX: &str = "lease:";
+/// KV key prefix where non-secret lease metadata is written for the host.
+const LEASE_METADATA_KEY_PREFIX: &str = "credential-metadata:";
 
 #[derive(serde::Deserialize, serde::Serialize, Default, Clone)]
 struct Credential {
@@ -334,10 +336,11 @@ impl exports::credential_strategy::Guest for Component {
             )
         })?;
 
-        // The host reads the live token back from its encrypted KV under the
-        // handle we return (§6.1); the token never appears in the return value.
+        // The host reads the live token and non-secret project metadata back
+        // from encrypted KV under this opaque lease handle. The token never
+        // appears in the return value.
         let handle = handle_for(&account);
-        kinetix_plugin_sdk::helpers::kv_put_string(&format!("{LEASE_KEY_PREFIX}{handle}"), &access)
+        persist_lease(&handle, &access, &project)
             .map_err(|e| kinetix_plugin_sdk::helpers::error("plugin_internal", e))?;
 
         Ok(CredentialLease {
@@ -483,10 +486,16 @@ pub(crate) fn project_state_key(provider_id: &str, account_id: &str) -> String {
 }
 
 fn persist_project(account: &AccountRef, project_id: &str) -> Result<(), String> {
-    kinetix_plugin_sdk::helpers::kv_put_string(
+    credential_storage_put(
         &project_state_key(&account.provider_id, &account.account_id),
         project_id,
     )
+}
+
+fn persist_lease(handle: &str, access_token: &str, project_id: &str) -> Result<(), String> {
+    credential_storage_put(&format!("{LEASE_KEY_PREFIX}{handle}"), access_token)?;
+    let metadata = serde_json::json!({ "project_id": project_id }).to_string();
+    credential_storage_put(&format!("{LEASE_METADATA_KEY_PREFIX}{handle}"), &metadata)
 }
 
 fn antigravity_metadata() -> serde_json::Value {
@@ -2084,19 +2093,18 @@ impl exports::hooks::Guest for Component {
     }
 }
 
-// --- API v2 adapter world: the `v1internal` wire format. --------------------
+// --- API v3 adapter world: the `v1internal` wire format. --------------------
 //
-// This session-aware adapter is a separate WIT world. The main plugin,
-// authorization, and discovery exports remain API v1.
+// The session-aware, import-free adapter is a separate WIT world. The main
+// plugin, authorization, and discovery exports remain API v1.
 
-use adapter_world::exports::kinetix::plugin2_0_0::provider_adapter::Guest as ProviderAdapterGuest;
-use adapter_world::kinetix::plugin1_0_0::host_storage;
-use kinetix_plugin_sdk::adapter_v2 as adapter_world;
+use adapter_world::exports::kinetix::plugin3_0_0::provider_adapter::Guest as ProviderAdapterGuest;
+use kinetix_plugin_sdk::adapter_v3 as adapter_world;
 
 type AdapterPluginError = adapter_world::kinetix::plugin1_0_0::types::PluginError;
-type AdapterSessionContext = adapter_world::kinetix::plugin2_0_0::types::SessionContext;
+type AdapterSessionContext = adapter_world::kinetix::plugin3_0_0::types::SessionContext;
 
-/// Adapter error → the API v1 generated `PluginError` used by API v2.
+/// Adapter error → the API v1 generated `PluginError` used by API v3.
 fn adapter_err(e: crate::adapter::AdapterError) -> AdapterPluginError {
     AdapterPluginError {
         code: e.code,
@@ -2105,39 +2113,6 @@ fn adapter_err(e: crate::adapter::AdapterError) -> AdapterPluginError {
         retry_after: None,
         reset_at: None,
     }
-}
-
-fn provider_with_account_project(provider_json: &str) -> String {
-    let mut provider: serde_json::Value =
-        serde_json::from_str(provider_json).unwrap_or_else(|_| serde_json::json!({}));
-    let provider_id = provider
-        .get("id")
-        .and_then(|value| value.as_str())
-        .map(str::to_string);
-    let account_id = provider
-        .pointer("/_kinetix/account_id")
-        .and_then(|value| value.as_str())
-        .map(str::to_string);
-
-    if let (Some(provider_id), Some(account_id)) = (provider_id, account_id) {
-        let key = project_state_key(&provider_id, &account_id);
-        if let Some(bytes) = host_storage::get(&key) {
-            if let Ok(project_id) = String::from_utf8(bytes) {
-                let project_id = project_id.trim();
-                if !project_id.is_empty() {
-                    if !provider
-                        .get("_kinetix")
-                        .is_some_and(serde_json::Value::is_object)
-                    {
-                        provider["_kinetix"] = serde_json::json!({});
-                    }
-                    provider["_kinetix"]["project_id"] = serde_json::json!(project_id);
-                }
-            }
-        }
-    }
-
-    provider.to_string()
 }
 
 impl ProviderAdapterGuest for Component {
@@ -2160,7 +2135,6 @@ impl ProviderAdapterGuest for Component {
         model_json: String,
         session: Option<AdapterSessionContext>,
     ) -> Result<String, AdapterPluginError> {
-        let provider_json = provider_with_account_project(&provider_json);
         crate::adapter::build_body(
             &request_json,
             &provider_json,
@@ -2184,7 +2158,7 @@ impl ProviderAdapterGuest for Component {
     }
 }
 
-adapter_world::export!(Component with_types_in kinetix_plugin_sdk::adapter_v2);
+adapter_world::export!(Component with_types_in kinetix_plugin_sdk::adapter_v3);
 
 use kinetix_plugin_sdk::health as health_world;
 
@@ -2944,6 +2918,22 @@ mod tests {
             project_state_key("provider", "account-a"),
             format!("project:{}", account_handle("provider", "account-a"))
         );
+    }
+
+    #[test]
+    fn credential_lease_stores_secret_and_project_metadata_separately() {
+        reset_test_credential_state();
+        persist_lease("opaque-handle", "access-token", "cloud-project").unwrap();
+
+        assert_eq!(
+            credential_storage_get("lease:opaque-handle").as_deref(),
+            Some("access-token")
+        );
+        let metadata = credential_storage_get("credential-metadata:opaque-handle").unwrap();
+        let metadata: serde_json::Value = serde_json::from_str(&metadata).unwrap();
+        assert_eq!(metadata["project_id"], "cloud-project");
+        assert!(!metadata.to_string().contains("access-token"));
+        reset_test_credential_state();
     }
 
     #[test]

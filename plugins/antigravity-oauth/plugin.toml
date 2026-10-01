@@ -2,7 +2,7 @@ manifest_version = 1
 id = "dev.kinetix.antigravity-oauth"
 name = "Antigravity OAuth"
 version = "0.1.13"
-plugin_api = "2"
+plugin_api = "3"
 
 # Antigravity accounts are provisioned by a host-managed refresh-token exchange
 # (§6.1). The plugin reads the account's OAuth JSON, refreshes the access token

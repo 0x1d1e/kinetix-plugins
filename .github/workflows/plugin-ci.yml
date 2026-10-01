@@ -19,6 +19,8 @@ jobs:
           targets: wasm32-unknown-unknown
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: Install wasm-tools
+        run: cargo install wasm-tools --locked --version 1.258.0
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Run plugin unit tests
@@ -32,11 +34,16 @@ jobs:
           python3 scripts/validate_response_contract.py
       - name: Check plugin workspace
         run: cargo check --locked --workspace --target wasm32-unknown-unknown
+      - name: Test compiled adapter runtime boundary
+        run: scripts/test_adapter_component_runtime.sh
       - name: Validate catalog JSON
         run: |
           python3 -m json.tool catalog.json >/dev/null
           python3 -m json.tool trusted-publishers.json >/dev/null
-      - name: Validate plugin manifests
+      - name: Validate plugin metadata and package contract
         run: |
           python3 scripts/test_validate_manifests.py
           python3 scripts/validate_manifests.py
+          python3 scripts/test_validate_packages.py
+          python3 scripts/test_validate_catalog.py
+          python3 scripts/validate_catalog.py

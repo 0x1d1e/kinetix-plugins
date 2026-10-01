@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kinetix.dev/schemas/package-provenance-v1.schema.json",
+  "title": "Kinetix package provenance v1",
+  "type": "object",
+  "required": ["schema_version"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": 1 },
+    "source": {
+      "type": "object",
+      "required": ["repository", "revision", "working_tree_clean"],
+      "additionalProperties": false,
+      "properties": {
+        "repository": { "type": "string", "pattern": "^https://[^/]+/[^/]+/[^/]+$" },
+        "revision": { "type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$" },
+        "working_tree_clean": { "type": "boolean" }
+      }
+    }
+  }
+}

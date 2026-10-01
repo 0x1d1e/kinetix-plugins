@@ -36,16 +36,8 @@ case "$OUT_DIR" in
 esac
 mkdir -p "$OUT_DIR"
 
-PKG_NAME="$(grep -m1 '^name' "$PLUGIN_DIR/Cargo.toml" | sed -E 's/.*"(.*)".*/\1/')"
-CRATE_VERSION="$(grep -m1 '^version' "$PLUGIN_DIR/Cargo.toml" | sed -E 's/.*"(.*)".*/\1/')"
-PLUGIN_ID="$(grep -m1 '^id' "$PLUGIN_DIR/plugin.toml" | sed -E 's/.*"(.*)".*/\1/')"
-MANIFEST_VERSION="$(grep -m1 '^version' "$PLUGIN_DIR/plugin.toml" | sed -E 's/.*"(.*)".*/\1/')"
-
-[ "$CRATE_VERSION" = "$MANIFEST_VERSION" ] || {
-  echo "Cargo.toml version ($CRATE_VERSION) does not match plugin.toml version ($MANIFEST_VERSION)" >&2
-  exit 1
-}
-VERSION="$MANIFEST_VERSION"
+METADATA="$(python3 "$ROOT/scripts/validate_manifests.py" --plugin-dir "$PLUGIN_DIR" --print-fields)"
+IFS=$'\t' read -r PLUGIN_ID VERSION PKG_NAME <<<"$METADATA"
 
 command -v wasm-tools >/dev/null || { echo "wasm-tools is required" >&2; exit 1; }
 
@@ -77,6 +69,8 @@ wasm-tools validate --features component-model "$WORK/plugin.wasm"
 cp "$PLUGIN_DIR/plugin.toml" "$WORK/plugin.toml"
 [ -f "$PLUGIN_DIR/README.md" ] && cp "$PLUGIN_DIR/README.md" "$WORK/README.md"
 [ -f "$PLUGIN_DIR/LICENSE" ] && cp "$PLUGIN_DIR/LICENSE" "$WORK/LICENSE"
+python3 "$ROOT/scripts/validate_packages.py" \
+  --write-provenance "$WORK/provenance.json" --root "$ROOT"
 
 if [ -n "$SIGNING_KEY_FILE" ]; then
   echo "==> signing package payload"
@@ -98,10 +92,13 @@ FILES=(plugin.toml plugin.wasm)
 [ -f "$WORK/README.md" ] && FILES+=(README.md)
 [ -f "$WORK/LICENSE" ] && FILES+=(LICENSE)
 [ -f "$WORK/signature.ed25519" ] && FILES+=(signature.ed25519)
+FILES+=(provenance.json)
 
 tar --sort=name --mtime='UTC 2020-01-01' --owner=0 --group=0 --numeric-owner \
     -C "$WORK" -cf "$PACKAGE_OUT" "${FILES[@]}" 2>/dev/null \
   || tar -C "$WORK" -cf "$PACKAGE_OUT" "${FILES[@]}"
+
+python3 "$ROOT/scripts/validate_packages.py" "$PACKAGE_OUT"
 
 echo "==> wrote $COMPONENT_OUT"
 sha256sum "$COMPONENT_OUT" | awk '{print "    sha256 " $1}'

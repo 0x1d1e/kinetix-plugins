@@ -101,12 +101,23 @@ pub fn build_body(
     model_json: &str,
     session_context: Option<&str>,
 ) -> Result<String, AdapterError> {
+    let provider: Value = serde_json::from_str(provider_json).unwrap_or(Value::Null);
+    let now_unix_millis = provider
+        .pointer("/_kinetix/now_unix_millis")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            err(
+                "invalid_configuration",
+                "core adapter context is missing _kinetix.now_unix_millis",
+            )
+        })?;
+
     build_body_at(
         request_json,
         provider_json,
         model_json,
         session_context,
-        kinetix_plugin_sdk::helpers::now_unix_millis(),
+        now_unix_millis,
     )
 }
 
@@ -1631,6 +1642,43 @@ mod tests {
             project_id(&provider, &json!({})).unwrap(),
             "operator-project"
         );
+    }
+
+    #[test]
+    fn build_body_uses_core_owned_project_and_time_context() {
+        let provider = json!({
+            "id": "antigravity",
+            "_kinetix": {
+                "project_id": "core-project",
+                "now_unix_millis": 1_700_000_000_123_u64
+            }
+        });
+        let body = super::build_body(
+            r#"{"schema":"kinetix.plugin.request","schema_version":1,"messages":[]}"#,
+            &provider.to_string(),
+            r#"{"upstream_id":"gemini-3-flash"}"#,
+            None,
+        )
+        .unwrap();
+        let body: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["project"], "core-project");
+        assert!(body["requestId"]
+            .as_str()
+            .unwrap()
+            .contains("/1700000000123/"));
+    }
+
+    #[test]
+    fn build_body_requires_core_owned_time_context() {
+        let error = super::build_body(
+            r#"{"messages":[]}"#,
+            r#"{"_kinetix":{"project_id":"core-project"}}"#,
+            "{}",
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "invalid_configuration");
+        assert!(error.message.contains("_kinetix.now_unix_millis"));
     }
 
     #[test]

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kinetix.dev/schemas/trusted-publishers-v1.schema.json",
+  "title": "Kinetix trusted publishers v1",
+  "type": "object",
+  "required": ["schema_version", "publishers"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "publishers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "publisher", "algorithm", "public_key_base64", "enabled"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "publisher": { "type": "string", "minLength": 1 },
+          "algorithm": { "const": "ed25519" },
+          "public_key_base64": { "type": "string", "minLength": 1 },
+          "enabled": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}

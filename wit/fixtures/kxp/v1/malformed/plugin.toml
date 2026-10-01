@@ -1,0 +1,6 @@
+manifest_version = 1
+id = "dev.kinetix.b-ai"
+id = "dev.kinetix.other"
+name = "Malformed fixture"
+version = "0.1.1"
+plugin_api = "1"
