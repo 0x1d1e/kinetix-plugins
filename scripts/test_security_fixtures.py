@@ -59,11 +59,24 @@ class SecurityFixtureTests(unittest.TestCase):
         self.assertEqual(cases["log-bounds"]["expect"]["max_log_record_bytes"],
                          VECTORS["setup"]["log_record_bytes"])
 
-    def test_ambient_categories_are_present(self):
-        self.assertEqual({item["id"] for item in VECTORS["ambient_imports"]}, {
-            "filesystem", "host-paths", "process-shell", "environment", "raw-sockets",
-            "arbitrary-network", "system-credentials", "randomness",
-        })
+    def test_ambient_probes_require_callable_operations(self):
+        operations = {
+            "filesystem": ("wasi:filesystem/types@0.2.0", "[method]descriptor.open-at"),
+            "host-paths": ("wasi:filesystem/preopens@0.2.0", "get-directories"),
+            "process-shell": ("kinetix:ambient/process-shell", "exec"),
+            "environment": ("wasi:cli/environment@0.2.0", "get-environment"),
+            "raw-sockets": ("wasi:sockets/tcp-create-socket@0.2.0", "create-tcp-socket"),
+            "arbitrary-network": ("wasi:http/outgoing-handler@0.2.0", "handle"),
+            "system-credentials": ("kinetix:ambient/system-credentials", "read"),
+            "randomness": ("wasi:random/random@0.2.0", "get-random-u64"),
+        }
+        self.assertEqual({item["id"] for item in VECTORS["ambient_imports"]}, set(operations))
+        for item in VECTORS["ambient_imports"]:
+            with self.subTest(probe=item["id"]):
+                self.assertNotIn("resource", item)
+                self.assertNotIn("signature", item)
+                self.assertEqual((item["import"], item["function"]), operations[item["id"]])
+                self.assertEqual(item["operation"], {"op": "ambient", "id": item["id"]})
 
 
 def check_packages(directory):

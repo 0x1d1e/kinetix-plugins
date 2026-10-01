@@ -68,13 +68,13 @@
     {"id": "clock-approved", "package": "scoped", "approval": "scoped", "operation": {"op": "clock"}, "expect": {"outcome": "allow", "detail_code": "1700000000123"}}
   ],
   "ambient_imports": [
-    {"id": "filesystem", "import": "wasi:filesystem/types@0.2.0", "resource": "descriptor"},
-    {"id": "host-paths", "import": "wasi:filesystem/preopens@0.2.0", "resource": "descriptor"},
-    {"id": "process-shell", "import": "kinetix:ambient/process-shell", "function": "exec", "signature": "(param \"command\" string) (result u32)"},
-    {"id": "environment", "import": "wasi:cli/environment@0.2.0", "function": "get-environment", "signature": "(result (list (tuple string string)))"},
-    {"id": "raw-sockets", "import": "wasi:sockets/tcp@0.2.0", "resource": "tcp-socket"},
-    {"id": "arbitrary-network", "import": "wasi:http/outgoing-handler@0.2.0", "resource": "future-incoming-response"},
-    {"id": "system-credentials", "import": "kinetix:ambient/system-credentials", "function": "read", "signature": "(param \"name\" string) (result string)"},
-    {"id": "randomness", "import": "wasi:random/random@0.2.0", "function": "get-random-u64", "signature": "(result u64)"}
+    {"id": "filesystem", "import": "wasi:filesystem/types@0.2.0", "function": "[method]descriptor.open-at", "operation": {"op": "ambient", "id": "filesystem"}},
+    {"id": "host-paths", "import": "wasi:filesystem/preopens@0.2.0", "function": "get-directories", "operation": {"op": "ambient", "id": "host-paths"}},
+    {"id": "process-shell", "import": "kinetix:ambient/process-shell", "function": "exec", "operation": {"op": "ambient", "id": "process-shell"}},
+    {"id": "environment", "import": "wasi:cli/environment@0.2.0", "function": "get-environment", "operation": {"op": "ambient", "id": "environment"}},
+    {"id": "raw-sockets", "import": "wasi:sockets/tcp-create-socket@0.2.0", "function": "create-tcp-socket", "operation": {"op": "ambient", "id": "raw-sockets"}},
+    {"id": "arbitrary-network", "import": "wasi:http/outgoing-handler@0.2.0", "function": "handle", "operation": {"op": "ambient", "id": "arbitrary-network"}},
+    {"id": "system-credentials", "import": "kinetix:ambient/system-credentials", "function": "read", "operation": {"op": "ambient", "id": "system-credentials"}},
+    {"id": "randomness", "import": "wasi:random/random@0.2.0", "function": "get-random-u64", "operation": {"op": "ambient", "id": "randomness"}}
   ]
 }

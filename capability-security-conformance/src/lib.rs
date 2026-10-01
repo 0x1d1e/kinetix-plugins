@@ -7,9 +7,17 @@
 use kinetix::plugin::{host_clock, host_credential, host_http, host_log, host_storage, types::*};
 use serde_json::Value;
 
+#[cfg(not(feature = "ambient"))]
 wit_bindgen::generate!({
     path: "../wit",
     world: "plugin",
+});
+
+#[cfg(feature = "ambient")]
+wit_bindgen::generate!({
+    path: ["../wit", "wit"],
+    world: "kinetix:security-fixture/ambient",
+    generate_all,
 });
 
 struct Component;
@@ -56,6 +64,8 @@ fn request(operation: &Value) -> Result<HttpRequest, PluginError> {
 
 fn probe(operation: &Value) -> Result<String, PluginError> {
     match text(operation, "op")? {
+        #[cfg(feature = "ambient")]
+        "ambient" => ambient_probe(text(operation, "id")?),
         "http" => {
             let mut response = None;
             for _ in 0..operation["repeat"].as_u64().unwrap_or(1) {
@@ -164,6 +174,72 @@ impl exports::hooks::Guest for Component {
     }
     fn on_usage_finalized(_: String) -> Result<(), PluginError> {
         deny_undeclared()
+    }
+}
+
+#[cfg(feature = "ambient")]
+fn ambient_probe(id: &str) -> Result<String, PluginError> {
+    match id {
+        #[cfg(feature = "filesystem")]
+        "filesystem" => {
+            let directories = wasi::filesystem::preopens::get_directories();
+            let (descriptor, _) = directories
+                .first()
+                .ok_or_else(|| error("no preopened directory"))?;
+            // Attempt a real descriptor operation, not just a resource import.
+            descriptor
+                .open_at(
+                    wasi::filesystem::types::PathFlags::empty(),
+                    "fixture.txt",
+                    wasi::filesystem::types::OpenFlags::empty(),
+                    wasi::filesystem::types::DescriptorFlags::READ,
+                )
+                .map_err(|e| error(format!("{e:?}")))?;
+            Ok("descriptor opened".into())
+        }
+        #[cfg(feature = "host-paths")]
+        "host-paths" => Ok(format!(
+            "{} preopens",
+            wasi::filesystem::preopens::get_directories().len()
+        )),
+        #[cfg(feature = "process-shell")]
+        "process-shell" => Ok(kinetix::ambient::process_shell::exec("fixture-command").to_string()),
+        #[cfg(feature = "environment")]
+        "environment" => Ok(format!(
+            "{} variables",
+            wasi::cli::environment::get_environment().len()
+        )),
+        #[cfg(feature = "raw-sockets")]
+        "raw-sockets" => {
+            wasi::sockets::tcp_create_socket::create_tcp_socket(
+                wasi::sockets::network::IpAddressFamily::Ipv4,
+            )
+            .map_err(|e| error(format!("{e:?}")))?;
+            Ok("socket created".into())
+        }
+        #[cfg(feature = "arbitrary-network")]
+        "arbitrary-network" => {
+            let request = wasi::http::types::OutgoingRequest::new(wasi::http::types::Fields::new());
+            request
+                .set_scheme(Some(&wasi::http::types::Scheme::Https))
+                .map_err(|_| error("cannot set scheme"))?;
+            request
+                .set_authority(Some("api.fixture.invalid"))
+                .map_err(|_| error("cannot set authority"))?;
+            request
+                .set_path_with_query(Some("/"))
+                .map_err(|_| error("cannot set path"))?;
+            wasi::http::outgoing_handler::handle(request, None)
+                .map_err(|e| error(format!("{e:?}")))?;
+            Ok("request sent".into())
+        }
+        #[cfg(feature = "system-credentials")]
+        "system-credentials" => Ok(kinetix::ambient::system_credentials::read(
+            "fixture-credential",
+        )),
+        #[cfg(feature = "randomness")]
+        "randomness" => Ok(wasi::random::random::get_random_u64().to_string()),
+        _ => Err(error(format!("unknown ambient probe {id}"))),
     }
 }
 

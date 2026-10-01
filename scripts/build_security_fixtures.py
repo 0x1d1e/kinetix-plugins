@@ -43,27 +43,33 @@ def build(output):
             package(output / profile / "dev.kinetix.security-fixture-0.1.0.kxp",
                     (FIXTURES / profile / "plugin.toml").read_bytes(), component_bytes)
         shutil.copyfile(component, output / "probe.wasm")
+        # Inert type import: a control, not an ambient-denial vector.
+        type_control = temp / "type-only.wat"
+        type_control.write_text('''(component
+            (import "wasi:filesystem/types@0.2.0"
+                (instance $types (export "descriptor" (type (sub resource)))))
+            (alias export $types "descriptor" (type $descriptor))
+            (export "descriptor" (type $descriptor))
+        )''')
+        subprocess.run([
+            "wasm-tools", "parse", str(type_control), "-o", str(output / "type-only.wasm"),
+        ], check=True)
+        subprocess.run(["wasm-tools", "validate", str(output / "type-only.wasm")], check=True)
         vectors = json.loads((FIXTURES / "cases.json").read_text())
-        probe_wat = subprocess.check_output(
-            ["wasm-tools", "print", str(component)], text=True,
-        ).rstrip()
         for ambient in vectors["ambient_imports"]:
-            # Require a real WASI resource or function, not a made-up signature
-            # that would hide permissive registration behind a type mismatch.
-            if "resource" in ambient:
-                declarations = ""
-                required = '(export ' + json.dumps(ambient["resource"]) + ' (type (sub resource)))'
-            else:
-                declarations = '(type $forbidden-import-op (func ' + ambient["signature"] + '))'
-                required = '(export ' + json.dumps(ambient["function"]) + ' (func (type $forbidden-import-op)))'
-            wat = temp / "ambient.wat"
-            wat.write_text(
-                probe_wat[:-1] + '\n' + declarations + '(import '
-                + json.dumps(ambient["import"]) + ' (instance ' + required + ')))\n'
-            )
+            # Compile callable probes against pinned upstream WASI WIT. Unused
+            # imports disappear, retaining real resource aliases and signatures.
+            subprocess.run([
+                "cargo", "build", "--locked", "--release", "--target", "wasm32-unknown-unknown",
+                "-p", "kinetix-plugin-security-fixture", "--features", ambient["id"],
+            ], cwd=ROOT, check=True)
             wasm = output / "ambient" / (ambient["id"] + ".wasm")
             wasm.parent.mkdir(parents=True, exist_ok=True)
-            subprocess.run(["wasm-tools", "parse", str(wat), "-o", str(wasm)], check=True)
+            subprocess.run([
+                "wasm-tools", "component", "new",
+                str(ROOT / "target/wasm32-unknown-unknown/release/kinetix_plugin_security_fixture.wasm"),
+                "-o", str(wasm),
+            ], check=True)
             subprocess.run(["wasm-tools", "validate", str(wasm)], check=True)
             package(output / "ambient" / ambient["id"] / "dev.kinetix.security-fixture-0.1.0.kxp",
                     (FIXTURES / "denied/plugin.toml").read_bytes(), wasm.read_bytes())
