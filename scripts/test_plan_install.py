@@ -80,7 +80,18 @@ class InstallPlanTests(unittest.TestCase):
                         "mode": "manual", "kind": "api_key", "requirements": ["api_key"],
                     })
                 self.assertEqual(objects["accounts"][0]["credential"], objects["credentials"][0]["ref"])
-                self.assertEqual(objects["routes"][0]["account"], objects["accounts"][0]["ref"])
+                self.assertNotIn("account", objects["routes"][0])
+
+    def test_account_proposal_does_not_change_route_pool_semantics(self):
+        for case in CASES[1:]:
+            data = fixture(case)
+            with_account = generate_plan(data)["objects"]["routes"]
+            data["integrations"][0]["install"].pop("account")
+            with self.subTest(case=case):
+                self.assertEqual(with_account, generate_plan(data)["objects"]["routes"])
+                pinned = generate_plan(fixture(case))
+                pinned["objects"]["routes"][0]["account"] = f"account/{case}"
+                self.assertFalse(VALIDATOR.is_valid(pinned))
 
     def test_optional_proposals_are_not_invented_and_permissions_are_not_grants(self):
         for path in sorted((ROOT / "plugins").glob("*/plugin.toml")):
@@ -196,6 +207,30 @@ class InstallPlanTests(unittest.TestCase):
                     self.assertEqual(plan, generate_plan(data))
                     self.assertEqual(package.read_bytes(), contents)
             self.assertEqual(len(list(directory.iterdir())), len(CASES))
+
+    def test_shared_manifest_vectors_and_native_package_cli(self):
+        vectors = json.loads((ROOT / "wit/fixtures/plugin-manifest/v1/cases.json").read_text())
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            for case in vectors["cases"]:
+                data = tomllib.loads(case["manifest"])
+                with self.subTest(case=case["name"]):
+                    if not case["plan_valid"]:
+                        with self.assertRaises(ValueError):
+                            generate_plan(data)
+                        continue
+                    plan = generate_plan(data)
+                    VALIDATOR.validate(plan)
+                    self.assertTrue(all("account" not in route for route in plan["objects"]["routes"]))
+                    if case["name"].startswith("native-"):
+                        package = directory / f"{data['id']}-{data['version']}.kxp"
+                        make_archive(package, manifest=case["manifest"].encode())
+                        result = cli("--package", package)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        package_plan = json.loads(result.stdout)
+                        VALIDATOR.validate(package_plan)
+                        package_plan["package"].pop("sha256")
+                        self.assertEqual(package_plan, plan)
 
     def test_cli_invalid_input_emits_no_partial_plan(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -68,7 +68,6 @@
     ],
     "routes": [
       {
-        "account": "account/antigravity",
         "integration": "integration/antigravity",
         "model": "gemini-2.5-pro",
         "ref": "route/antigravity/example"

@@ -31,6 +31,8 @@ def generate_plan(manifest: dict) -> dict:
         mode = integration.get("credential_mode")
         if mode is None:
             raise ValueError(f"integration {integration_id}: install planning requires explicit credential_mode; legacy inference is host-owned")
+        if mode == "manual" and "manual_credential" not in integration:
+            raise ValueError(f"integration {integration_id}: install planning requires manual_credential kind and requirements")
         integration_ref = f"integration/{integration_id}"
         account_ref = f"account/{integration_id}"
         credential_ref = f"credential/{integration_id}"
@@ -59,13 +61,14 @@ def generate_plan(manifest: dict) -> dict:
                 "ref": f"route/{integration_id}/{route['id']}",
                 "integration": integration_ref, "model": route["model"],
             }
-            if account is not None:
-                proposal["account"] = account_ref
             objects["routes"].append(proposal)
 
-    permissions = data["permissions"]
-    permissions["network_hosts"].sort()
-    permissions["credential_scopes"].sort()
+    requested = data.get("permissions", {})
+    permissions = {
+        "network_hosts": sorted(requested.get("network_hosts", [])),
+        "credential_scopes": sorted(requested.get("credential_scopes", [])),
+        "credential_read": requested.get("credential_read", False),
+    }
     return {
         "schema_version": 1,
         "package": {

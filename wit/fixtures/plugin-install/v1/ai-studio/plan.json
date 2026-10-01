@@ -75,7 +75,6 @@
     ],
     "routes": [
       {
-        "account": "account/ai-studio",
         "integration": "integration/ai-studio",
         "model": "gemini-2.5-flash",
         "ref": "route/ai-studio/example"

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://kinetix.dev/schemas/install-plan-v1.schema.json",
-  "title": "Kinetix plugin install proposal v1",
+  "title": "Draft Kinetix plugin install proposal v1",
   "description": "Inspect-only proposal. References are local to this package, not host object IDs. Credential objects request acquisition, never contain values. Applying and activating remain host-owned.",
   "type": "object",
   "required": ["schema_version", "package", "requested_permissions", "objects", "apply_requires_approval", "traffic_enabled"],
@@ -22,7 +22,12 @@
         "sha256": { "$ref": "#/$defs/digest" }
       }
     },
-    "requested_permissions": { "$ref": "plugin-manifest-v1.schema.json#/$defs/permissions" },
+    "requested_permissions": {
+      "allOf": [
+        { "$ref": "plugin-manifest-v1.schema.json#/$defs/permissions" },
+        { "required": ["network_hosts", "credential_scopes", "credential_read"] }
+      ]
+    },
     "objects": {
       "type": "object",
       "required": ["integrations", "accounts", "credentials", "routes"],
@@ -107,7 +112,6 @@
       "properties": {
         "ref": { "type": "string", "pattern": "^route/[a-z0-9_-]{1,64}/[a-z0-9_-]{1,64}$" },
         "integration": { "$ref": "#/$defs/integrationRef" },
-        "account": { "$ref": "#/$defs/accountRef" },
         "model": { "type": "string", "minLength": 1 }
       }
     }

@@ -8,7 +8,9 @@ This repository defines plugin metadata and `.kxp` packaging. Kinetix owns insta
 
 A release artifact is named `<id>-<version>.kxp`. The catalog's `id`, `latest_version`, and `artifact_name` must match the manifest identity. The host must report a mismatch rather than silently installing under the catalog's identity.
 
-Installation metadata and inspect-only proposals are defined in [Declarative install plans v1](plugin-install-v1.md). Hosts must support the new installation fields before packages using them are released.
+Native-only provider packages may omit `provides`. Anonymous providers declare `auth_scheme = "none"`; public identifier parameters are constrained to URL path segments. Omitted permissions request no authority; other omitted fields retain core defaults. [Shared manifest vectors](../wit/fixtures/plugin-manifest/v1/cases.json) are tested by both repositories.
+
+New installation metadata and inspect-only proposals are defined in [the draft install-plan contract](plugin-install-v1.md). These fields require companion host support before release; older strict host parsers reject them.
 
 ## `.kxp` archive
 
