@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Focused tests for plugin manifest feature and protocol validation."""
 
+import json
 import pathlib
 import sys
+import tomllib
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -102,7 +104,7 @@ class ManifestValidationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_manifest(self.path, manifest(FEATURES))
 
-    def test_schema_rejects_unknown_fields_and_missing_permissions(self):
+    def test_schema_rejects_unknown_fields_and_accepts_host_defaults(self):
         changed = manifest()
         changed["extra"] = True
         with self.assertRaises(ValueError):
@@ -110,8 +112,8 @@ class ManifestValidationTests(unittest.TestCase):
 
         changed = manifest()
         del changed["permissions"]
-        with self.assertRaises(ValueError):
-            validate_manifest(self.path, changed)
+        del changed["limits"]
+        self.assertEqual(validate_manifest(self.path, changed), "dev.kinetix.test")
 
     def test_rejects_invalid_semver_and_accepts_valid_prerelease(self):
         for version in (
@@ -266,6 +268,17 @@ class ManifestValidationTests(unittest.TestCase):
         changed["integrations"][0]["provider"] = base_provider | {"wire_format": "anthropic"}
         with self.assertRaises(ValueError):
             validate_manifest(self.path, changed)
+
+    def test_portable_vectors_match_companion_host_contract(self):
+        vectors = pathlib.Path(__file__).resolve().parent.parent / "wit/fixtures/plugin-manifest/v1/cases.json"
+        for case in json.loads(vectors.read_text())["cases"]:
+            data = tomllib.loads(case["manifest"])
+            with self.subTest(case=case["name"]):
+                if case["valid"]:
+                    self.assertEqual(validate_manifest(self.path, data), data["id"])
+                else:
+                    with self.assertRaises(ValueError):
+                        validate_manifest(self.path, data)
 
     def test_host_compatibility_remains_host_owned(self):
         changed = manifest()

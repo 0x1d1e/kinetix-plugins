@@ -1,0 +1,100 @@
+{
+  "apply_requires_approval": true,
+  "objects": {
+    "accounts": [
+      {
+        "credential": "credential/b-ai",
+        "integration": "integration/b-ai",
+        "name": "Example account",
+        "ref": "account/b-ai"
+      }
+    ],
+    "credentials": [
+      {
+        "account": "account/b-ai",
+        "acquisition": {
+          "kind": "api_key",
+          "mode": "manual",
+          "requirements": [
+            "api_key"
+          ]
+        },
+        "integration": "integration/b-ai",
+        "ref": "credential/b-ai"
+      }
+    ],
+    "integrations": [
+      {
+        "declaration": {
+          "credential_mode": "manual",
+          "description": "Use B.AI's OpenAI-compatible API with live model discovery.",
+          "features": {
+            "health_probe": false,
+            "model_discovery": true,
+            "parallel_tools": true,
+            "quota_probe": false,
+            "reasoning": true,
+            "schema_version": 1,
+            "streaming": true,
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "id": "b-ai",
+          "manual_credential": {
+            "kind": "api_key",
+            "requirements": [
+              "api_key"
+            ]
+          },
+          "model_source": "b-ai-models",
+          "name": "B.AI",
+          "protocols": {
+            "input": [
+              "openai-chat",
+              "openai-responses",
+              "anthropic"
+            ],
+            "upstream": [
+              "openai-chat"
+            ]
+          },
+          "provider": {
+            "auth_scheme": "bearer",
+            "base_url": "https://api.b.ai/v1",
+            "capability_mode": "permissive",
+            "follow_redirects": false,
+            "models_path": "/models",
+            "timeout_ms": 120000,
+            "wire_format": "openai"
+          }
+        },
+        "ref": "integration/b-ai"
+      }
+    ],
+    "routes": [
+      {
+        "integration": "integration/b-ai",
+        "model": "gpt-4o",
+        "ref": "route/b-ai/example"
+      }
+    ]
+  },
+  "package": {
+    "id": "dev.kinetix.b-ai",
+    "manifest_sha256": "09aa09981ebc5f3acfbba991664cef923b6997b80c02d1053c64d9c7fb3dad58",
+    "plugin_api": "1",
+    "version": "0.1.2"
+  },
+  "requested_permissions": {
+    "credential_read": false,
+    "credential_scopes": [
+      "*"
+    ],
+    "network_hosts": [
+      "api.b.ai"
+    ]
+  },
+  "schema_version": 1,
+  "traffic_enabled": false
+}

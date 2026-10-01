@@ -1,0 +1,98 @@
+{
+  "apply_requires_approval": true,
+  "objects": {
+    "accounts": [
+      {
+        "credential": "credential/antigravity",
+        "integration": "integration/antigravity",
+        "name": "Example account",
+        "ref": "account/antigravity"
+      }
+    ],
+    "credentials": [
+      {
+        "account": "account/antigravity",
+        "acquisition": {
+          "flow": "antigravity",
+          "mode": "auth_flow",
+          "strategy": "antigravity-oauth"
+        },
+        "integration": "integration/antigravity",
+        "ref": "credential/antigravity"
+      }
+    ],
+    "integrations": [
+      {
+        "declaration": {
+          "auth_flow": "antigravity",
+          "credential_mode": "auth_flow",
+          "credential_strategy": "antigravity-oauth",
+          "description": "Connect a Google Antigravity account and use the v1internal model API.",
+          "features": {
+            "health_probe": false,
+            "model_discovery": true,
+            "parallel_tools": true,
+            "quota_probe": false,
+            "reasoning": true,
+            "schema_version": 1,
+            "streaming": true,
+            "structured_output": false,
+            "tools": true,
+            "vision": true
+          },
+          "id": "antigravity",
+          "model_source": "antigravity-models",
+          "name": "Google Antigravity",
+          "protocols": {
+            "input": [
+              "openai-chat",
+              "openai-responses",
+              "anthropic"
+            ],
+            "upstream": [
+              "plugin-native"
+            ]
+          },
+          "provider": {
+            "auth_scheme": "bearer",
+            "base_url": "https://daily-cloudcode-pa.googleapis.com",
+            "capability_mode": "permissive",
+            "follow_redirects": false,
+            "timeout_ms": 120000,
+            "wire_format": "plugin"
+          },
+          "provider_adapter": "antigravity"
+        },
+        "ref": "integration/antigravity"
+      }
+    ],
+    "routes": [
+      {
+        "integration": "integration/antigravity",
+        "model": "gemini-2.5-pro",
+        "ref": "route/antigravity/example"
+      }
+    ]
+  },
+  "package": {
+    "id": "dev.kinetix.antigravity-oauth",
+    "manifest_sha256": "02b6fc7d64e5c27a13a74747cf45b9b8a85a5679af309329160c4c06192d3b04",
+    "plugin_api": "3",
+    "version": "0.1.14"
+  },
+  "requested_permissions": {
+    "credential_read": true,
+    "credential_scopes": [
+      "credential_strategy:antigravity-oauth"
+    ],
+    "network_hosts": [
+      "accounts.google.com",
+      "cloudcode-pa.googleapis.com",
+      "daily-cloudcode-pa.googleapis.com",
+      "oauth2.googleapis.com",
+      "www.googleapis.com"
+    ]
+  },
+  "schema_version": 1,
+  "traffic_enabled": false
+}

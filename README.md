@@ -43,6 +43,14 @@ dev.kinetix.claude-code-oauth-0.1.0.wasm
 
 The `.kxp` is the canonical installable Kinetix package. The `.wasm` file is the standalone WebAssembly Component binary contained by that package. See [the v1 package contract](docs/plugin-packages-v1.md) for archive, identity, digest, signature, and provenance rules.
 
+Inspect proposed installation objects and permissions without applying them:
+
+```sh
+python3 scripts/plan_install.py --manifest plugins/ai-studio/plugin.toml
+```
+
+See [the draft install-plan contract](docs/plugin-install-v1.md) for credential declarations, package inspection, and host approval requirements. New fields require [companion host support](https://github.com/PrightCord/kinetix/pull/190) before release.
+
 Build every first-party plugin into one output directory:
 
 ```sh

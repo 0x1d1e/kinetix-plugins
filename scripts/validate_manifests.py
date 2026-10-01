@@ -92,7 +92,48 @@ def validate_network_host(path: pathlib.Path, value: str) -> None:
         raise ValueError(f"{path}: network host {host!r}: IP literals are not allowed; declare a hostname")
 
 
-def validate_provider_template(path: pathlib.Path, integration: dict, provided: dict) -> None:
+def validate_connection_parameters(path: pathlib.Path, provider: dict, hosts: list[str]) -> None:
+    parameters = provider.get("parameters", {})
+    templates = (provider["base_url"], provider.get("models_path", ""))
+    if not parameters:
+        require(not any("{" in value or "}" in value for value in templates), path, "integration URL templates require declared parameters")
+        return
+    require(bool(hosts) and len(hosts) <= 64, path, "parameterized integration requires 1..=64 declared network_hosts")
+    for name, parameter in parameters.items():
+        require(parameter["min_length"] <= parameter["max_length"], path, f"invalid connection parameter declaration {name!r}")
+    parsed = urllib.parse.urlsplit(provider["base_url"])
+    require(not parsed.query and not parsed.fragment and "?" not in provider["base_url"] and "#" not in provider["base_url"], path, "connection base_url may not contain query or fragment")
+    remainder = provider["base_url"].split("://", 1)[1]
+    authority, _, base_path = remainder.partition("/")
+    require(not any(character in authority for character in "{}%"), path, "connection parameters are permitted only in URL path segments")
+    models_path = provider.get("models_path")
+    if models_path is not None:
+        require(models_path.startswith("/") and not models_path.startswith("//"), path, "connection models_path must be an absolute path")
+    for template_path in (base_path, models_path or ""):
+        require(len(template_path.encode("utf-8")) <= 4096 and not any(character in template_path for character in "%\\\\?#"), path, "connection path contains forbidden encoding or delimiters")
+        for segment in template_path.split("/"):
+            require(segment not in (".", ".."), path, "connection path must not contain traversal segments")
+            if "{" in segment or "}" in segment:
+                match = re.fullmatch(r"\{([^{}]+)\}", segment)
+                if match is None:
+                    raise ValueError(f"{path}: connection template variables must occupy a complete path segment")
+                require(match[1] in parameters, path, f"undeclared connection parameter {match[1]!r}")
+    for host in hosts:
+        require(not any(character in host for character in "/:{}% ?#"), path, "invalid connection network host")
+    hostname = parsed.hostname or ""
+    def matches(pattern: str) -> bool:
+        pattern = pattern.strip().lower()
+        if pattern.startswith("*."):
+            suffix = pattern[2:]
+            if not hostname.endswith(suffix):
+                return False
+            prefix = hostname[:-len(suffix)].removesuffix(".")
+            return bool(prefix) and "." not in prefix
+        return pattern == hostname
+    require(any(matches(host) for host in hosts), path, "connection destination is outside declared network_hosts")
+
+
+def validate_provider_template(path: pathlib.Path, integration: dict, permissions: dict) -> None:
     provider = integration.get("provider")
     if provider is None:
         return
@@ -113,7 +154,8 @@ def validate_provider_template(path: pathlib.Path, integration: dict, provided: 
     except UnicodeError as error:
         raise ValueError(f"{path}: {label} base_url has an invalid host: {error}") from error
 
-    wire_format = provider["wire_format"]
+    validate_connection_parameters(path, provider, permissions.get("network_hosts", []))
+    wire_format = provider.get("wire_format", "plugin")
     adapter = integration.get("provider_adapter")
     require(not adapter or wire_format == "plugin", path, f"integration {integration['id']} provider_adapter requires wire_format 'plugin'")
     require(wire_format != "plugin" or bool(adapter), path, f"integration {integration['id']} provider wire_format 'plugin' requires provider_adapter")
@@ -129,8 +171,13 @@ def validate_provider_template(path: pathlib.Path, integration: dict, provided: 
         for protocol in protocols["upstream"]:
             require(compatible[protocol] == wire_format, path, f"integration {integration['id']} upstream protocol {protocol!r} is incompatible with provider wire_format {wire_format!r}")
 
-    auth_scheme = provider["auth_scheme"]
-    if auth_scheme == "custom_header":
+    auth_scheme = provider.get("auth_scheme", "bearer")
+    if auth_scheme == "none":
+        mode = integration.get("credential_mode")
+        no_auth = mode == "none" or (mode is None and not permissions.get("credential_read", False) and not permissions.get("credential_scopes"))
+        auth_headers = {"authorization", "proxy-authorization", "x-api-key", "x-goog-api-key"}
+        require(no_auth and not integration.get("auth_flow") and not integration.get("credential_strategy") and "custom_header_name" not in provider and "custom_param_name" not in provider and not any(name.lower() in auth_headers for name in provider.get("extra_headers", {})), path, f"{label}: no-auth provider must use credential_mode 'none' without credential bindings or auth fields")
+    elif auth_scheme == "custom_header":
         require(bool(provider.get("custom_header_name", "").strip()), path, f"{label} custom_header auth requires custom_header_name")
     elif auth_scheme == "query_param":
         require(bool(provider.get("custom_param_name", "").strip()), path, f"{label} query_param auth requires custom_param_name")
@@ -155,14 +202,16 @@ def validate_source_semantics(path: pathlib.Path, data: dict) -> None:
         require(_semver_precedence(minimum) <= _semver_precedence(maximum), path, "compatibility.min_host_version must not exceed max_host_version")
 
     for field in ("memory", "max_http_body", "storage"):
-        validate_byte_size(path, field, data["limits"][field])
+        if field in data.get("limits", {}):
+            validate_byte_size(path, field, data["limits"][field])
 
-    provides = data["provides"]
+    provides = data.get("provides", {})
+    permissions = data.get("permissions", {})
     capability_keys = (
         "credential_strategies", "auth_flows", "model_sources", "account_model_sources",
         "provider_adapters", "health_probes", "routing_facts", "hooks",
     )
-    require(any(provides.get(key) for key in capability_keys), path, "manifest provides no capabilities")
+    require(any(provides.get(key) for key in capability_keys) or any(integration.get("provider") for integration in data.get("integrations", [])), path, "manifest provides no capabilities or provider integrations")
     require(not provides.get("thinking_translation") or bool(provides.get("provider_adapters")), path, "provides.thinking_translation requires at least one provider_adapter")
     allowed_hooks = {"on_request_normalized", "on_target_candidate", "on_usage_finalized"}
     require(set(provides.get("hooks", [])) <= allowed_hooks, path, "provides.hooks contains an unknown hook")
@@ -187,7 +236,7 @@ def validate_source_semantics(path: pathlib.Path, data: dict) -> None:
             "credential_strategy": "credential_strategies",
             "auth_flow": "auth_flows",
         }
-        require(any(integration.get(key) for key in (*bindings, "model_source")), path, f"integration {integration_id} must reference at least one provided capability")
+        require(any(integration.get(key) for key in (*bindings, "model_source", "provider")), path, f"integration {integration_id} must reference at least one provided capability or provider template")
         for field, provided_key in bindings.items():
             name = integration.get(field)
             if name:
@@ -200,6 +249,8 @@ def validate_source_semantics(path: pathlib.Path, data: dict) -> None:
             require(not (legacy and account), path, f"integration {integration_id} model_source {model_source!r} is declared as both legacy and account-aware")
 
         mode = integration.get("credential_mode")
+        manual = integration.get("manual_credential")
+        require(manual is None or mode == "manual", path, f"integration {integration_id}: manual_credential requires explicit manual credential mode")
         if mode == "auth_flow":
             require(bool(integration.get("auth_flow")) and bool(integration.get("credential_strategy")), path, f"integration {integration_id}: auth_flow credential mode requires auth_flow and credential_strategy")
         elif mode == "none":
@@ -207,7 +258,22 @@ def validate_source_semantics(path: pathlib.Path, data: dict) -> None:
         elif mode == "manual":
             require(not integration.get("auth_flow"), path, f"integration {integration_id}: manual credential mode cannot declare auth_flow")
 
-        validate_provider_template(path, integration, provided)
+        install = integration.get("install")
+        if install is not None:
+            require(mode is not None, path, f"integration {integration_id}: install requires explicit credential_mode")
+            require(integration.get("provider") is not None, path, f"integration {integration_id}: install requires a provider template")
+            require(mode != "manual" or manual is not None, path, f"integration {integration_id}: manual install requires manual_credential kind and requirements")
+            account = install.get("account")
+            require(account is None or mode != "none", path, f"integration {integration_id}: none credential mode cannot propose an account or credential")
+            if account is not None:
+                require(bool(account["name"].strip()), path, f"integration {integration_id}: account name must not be empty")
+            route_ids: set[str] = set()
+            for route in install.get("routes", []):
+                require(route["id"] not in route_ids, path, f"integration {integration_id}: duplicate install route id {route['id']}")
+                route_ids.add(route["id"])
+                require(bool(route["model"].strip()), path, f"integration {integration_id}: route model must not be empty")
+
+        validate_provider_template(path, integration, permissions)
 
     ui = data.get("ui", {})
     setting_keys: set[str] = set()
@@ -234,17 +300,18 @@ def validate_source_semantics(path: pathlib.Path, data: dict) -> None:
         action_ids.add(action_id)
         require(bool(action["label"].strip()), path, f"ui action {action_id!r} label must not be empty")
         integration = next((item for item in data.get("integrations", []) if item["id"] == action["integration"]), None)
-        require(integration is not None, path, f"ui action {action_id!r} references unknown integration {action['integration']!r}")
+        if integration is None:
+            raise ValueError(f"{path}: ui action {action_id!r} references unknown integration {action['integration']!r}")
         require(bool(integration.get("auth_flow")) and bool(integration.get("credential_strategy")), path, f"auth ui action {action_id!r} requires integration {integration['id']!r} to declare auth_flow and credential_strategy")
 
     network_hosts: set[str] = set()
-    for host in data["permissions"]["network_hosts"]:
+    for host in permissions.get("network_hosts", []):
         validate_network_host(path, host)
         require(host not in network_hosts, path, f"duplicate network_hosts entry {host!r}")
         network_hosts.add(host)
 
     credential_scopes: set[str] = set()
-    for scope in data["permissions"]["credential_scopes"]:
+    for scope in permissions.get("credential_scopes", []):
         require(scope not in credential_scopes, path, f"duplicate credential_scopes entry {scope!r}")
         credential_scopes.add(scope)
         if scope == "*":
@@ -265,14 +332,13 @@ def validate_source_semantics(path: pathlib.Path, data: dict) -> None:
             require(5_000 <= refresh <= 3_600_000, path, "routing_facts_refresh_ms must be 5000..=3600000 for cached routing facts")
 
 
-def validate_manifest(path: pathlib.Path, data: object) -> str:
+def validate_manifest(path: pathlib.Path, data: dict) -> str:
     errors = sorted(VALIDATOR.iter_errors(data), key=lambda error: list(map(str, error.absolute_path)))
     if errors:
         error = errors[0]
         location = ".".join(map(str, error.absolute_path)) or "manifest"
         raise ValueError(f"{path}: {location}: {error.message}")
 
-    assert isinstance(data, dict)
     validate_semver_component_bounds(path, data)
     validate_source_semantics(path, data)
     return data["id"]
@@ -289,7 +355,8 @@ def validate_plugin_directory(plugin_dir: pathlib.Path) -> tuple[str, str, str]:
         raise ValueError(f"{plugin_dir}: {error}") from error
 
     package = cargo.get("package")
-    require(isinstance(package, dict), cargo_path, "[package] table is required")
+    if not isinstance(package, dict):
+        raise ValueError(f"{cargo_path}: [package] table is required")
     crate_version = package.get("version")
     require(isinstance(crate_version, str), cargo_path, "[package].version must be a string")
     manifest_version = manifest["version"]

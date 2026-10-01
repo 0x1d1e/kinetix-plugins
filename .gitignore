@@ -4,3 +4,4 @@
 /plugins/*/*.wasm
 plugin.wasm
 .DS_Store
+__pycache__/

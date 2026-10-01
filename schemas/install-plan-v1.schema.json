@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kinetix.dev/schemas/install-plan-v1.schema.json",
+  "title": "Draft Kinetix plugin install proposal v1",
+  "description": "Inspect-only proposal. References are local to this package, not host object IDs. Credential objects request acquisition, never contain values. Applying and activating remain host-owned.",
+  "type": "object",
+  "required": ["schema_version", "package", "requested_permissions", "objects", "apply_requires_approval", "traffic_enabled"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": 1 },
+    "apply_requires_approval": { "const": true },
+    "traffic_enabled": { "const": false },
+    "package": {
+      "type": "object",
+      "required": ["id", "version", "plugin_api", "manifest_sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "plugin-manifest-v1.schema.json#/properties/id" },
+        "version": { "$ref": "plugin-manifest-v1.schema.json#/$defs/semver" },
+        "plugin_api": { "$ref": "plugin-manifest-v1.schema.json#/properties/plugin_api" },
+        "manifest_sha256": { "$ref": "#/$defs/digest" },
+        "sha256": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "requested_permissions": {
+      "allOf": [
+        { "$ref": "plugin-manifest-v1.schema.json#/$defs/permissions" },
+        { "required": ["network_hosts", "credential_scopes", "credential_read"] }
+      ]
+    },
+    "objects": {
+      "type": "object",
+      "required": ["integrations", "accounts", "credentials", "routes"],
+      "additionalProperties": false,
+      "properties": {
+        "integrations": { "type": "array", "items": { "$ref": "#/$defs/integration" } },
+        "accounts": { "type": "array", "items": { "$ref": "#/$defs/account" } },
+        "credentials": { "type": "array", "items": { "$ref": "#/$defs/credential" } },
+        "routes": { "type": "array", "items": { "$ref": "#/$defs/route" } }
+      }
+    }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "integrationRef": { "type": "string", "pattern": "^integration/[a-z0-9_-]{1,64}$" },
+    "accountRef": { "type": "string", "pattern": "^account/[a-z0-9_-]{1,64}$" },
+    "credentialRef": { "type": "string", "pattern": "^credential/[a-z0-9_-]{1,64}$" },
+    "integration": {
+      "type": "object",
+      "required": ["ref", "declaration"],
+      "additionalProperties": false,
+      "properties": {
+        "ref": { "$ref": "#/$defs/integrationRef" },
+        "declaration": {
+          "allOf": [
+            { "$ref": "plugin-manifest-v1.schema.json#/$defs/integration" },
+            { "required": ["credential_mode"], "not": { "required": ["install"] } }
+          ]
+        }
+      }
+    },
+    "account": {
+      "type": "object",
+      "required": ["ref", "integration", "name", "credential"],
+      "additionalProperties": false,
+      "properties": {
+        "ref": { "$ref": "#/$defs/accountRef" },
+        "integration": { "$ref": "#/$defs/integrationRef" },
+        "name": { "type": "string", "minLength": 1 },
+        "credential": { "$ref": "#/$defs/credentialRef" }
+      }
+    },
+    "credential": {
+      "type": "object",
+      "required": ["ref", "integration", "account", "acquisition"],
+      "additionalProperties": false,
+      "properties": {
+        "ref": { "$ref": "#/$defs/credentialRef" },
+        "integration": { "$ref": "#/$defs/integrationRef" },
+        "account": { "$ref": "#/$defs/accountRef" },
+        "acquisition": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["mode", "kind", "requirements"],
+              "additionalProperties": false,
+              "properties": {
+                "mode": { "const": "manual" },
+                "kind": { "$ref": "plugin-manifest-v1.schema.json#/$defs/manualCredential/properties/kind" },
+                "requirements": { "$ref": "plugin-manifest-v1.schema.json#/$defs/manualCredential/properties/requirements" },
+                "strategy": { "type": "string", "minLength": 1 }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["mode", "flow", "strategy"],
+              "additionalProperties": false,
+              "properties": {
+                "mode": { "const": "auth_flow" },
+                "flow": { "type": "string", "minLength": 1 },
+                "strategy": { "type": "string", "minLength": 1 }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "route": {
+      "type": "object",
+      "required": ["ref", "integration", "model"],
+      "additionalProperties": false,
+      "properties": {
+        "ref": { "type": "string", "pattern": "^route/[a-z0-9_-]{1,64}/[a-z0-9_-]{1,64}$" },
+        "integration": { "$ref": "#/$defs/integrationRef" },
+        "model": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

@@ -1,0 +1,101 @@
+{
+  "apply_requires_approval": true,
+  "objects": {
+    "accounts": [
+      {
+        "credential": "credential/ai-studio",
+        "integration": "integration/ai-studio",
+        "name": "Example account",
+        "ref": "account/ai-studio"
+      }
+    ],
+    "credentials": [
+      {
+        "account": "account/ai-studio",
+        "acquisition": {
+          "kind": "api_key",
+          "mode": "manual",
+          "requirements": [
+            "api_key"
+          ]
+        },
+        "integration": "integration/ai-studio",
+        "ref": "credential/ai-studio"
+      }
+    ],
+    "integrations": [
+      {
+        "declaration": {
+          "credential_mode": "manual",
+          "description": "Use Google AI Studio with native Gemini transport and live model discovery.",
+          "features": {
+            "health_probe": false,
+            "model_discovery": true,
+            "parallel_tools": true,
+            "quota_probe": false,
+            "reasoning": true,
+            "schema_version": 1,
+            "streaming": true,
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "id": "ai-studio",
+          "manual_credential": {
+            "kind": "api_key",
+            "requirements": [
+              "api_key"
+            ]
+          },
+          "model_source": "ai-studio-models",
+          "name": "Google AI Studio",
+          "protocols": {
+            "input": [
+              "openai-chat",
+              "openai-responses",
+              "anthropic"
+            ],
+            "upstream": [
+              "gemini"
+            ]
+          },
+          "provider": {
+            "auth_scheme": "custom_header",
+            "base_url": "https://generativelanguage.googleapis.com/v1beta",
+            "capability_mode": "permissive",
+            "custom_header_name": "x-goog-api-key",
+            "follow_redirects": false,
+            "models_path": "/models?pageSize=1000",
+            "timeout_ms": 120000,
+            "wire_format": "gemini"
+          }
+        },
+        "ref": "integration/ai-studio"
+      }
+    ],
+    "routes": [
+      {
+        "integration": "integration/ai-studio",
+        "model": "gemini-2.5-flash",
+        "ref": "route/ai-studio/example"
+      }
+    ]
+  },
+  "package": {
+    "id": "dev.kinetix.ai-studio",
+    "manifest_sha256": "ad5d10554262c214deea821bced85274d9bf4dc182b25c7cebe02d6a4527459e",
+    "plugin_api": "1",
+    "version": "0.1.2"
+  },
+  "requested_permissions": {
+    "credential_read": true,
+    "credential_scopes": [
+      "*"
+    ],
+    "network_hosts": [
+      "generativelanguage.googleapis.com"
+    ]
+  },
+  "schema_version": 1,
+  "traffic_enabled": false
+}

@@ -86,6 +86,7 @@ PY
 
 validate_plugin_metadata() {
   python3 scripts/test_validate_manifests.py \
+    && python3 scripts/test_plan_install.py \
     && python3 scripts/validate_manifests.py \
     && python3 scripts/test_validate_packages.py \
     && python3 scripts/test_validate_catalog.py \

@@ -52,3 +52,7 @@ wall_time_ms = 10000
 max_outbound_requests = 2
 max_http_body = "2MiB"
 storage = "64KiB"
+
+[[integrations.install.routes]]
+id = "example"
+model = "big-pickle"

@@ -8,6 +8,10 @@ This repository defines plugin metadata and `.kxp` packaging. Kinetix owns insta
 
 A release artifact is named `<id>-<version>.kxp`. The catalog's `id`, `latest_version`, and `artifact_name` must match the manifest identity. The host must report a mismatch rather than silently installing under the catalog's identity.
 
+Native-only provider packages may omit `provides`. Anonymous providers declare `auth_scheme = "none"`; public identifier parameters are constrained to URL path segments. Omitted permissions request no authority; other omitted fields retain core defaults. [Shared manifest vectors](../wit/fixtures/plugin-manifest/v1/cases.json) are tested by both repositories.
+
+New installation metadata and inspect-only proposals are defined in [the draft install-plan contract](plugin-install-v1.md). These fields require companion host support before release; older strict host parsers reject them.
+
 ## `.kxp` archive
 
 A v1 `.kxp` is an uncompressed TAR with regular files at the archive root. `plugin.toml` and `plugin.wasm` are required. `README.md`, `LICENSE`, `signature.ed25519`, and `provenance.json` are optional. The WASM file must have the WebAssembly magic and version header. Duplicate names, nested paths, traversal paths, and non-regular entries are invalid. The host also enforces a 64 MiB package limit, a 64 MiB component limit, 2 MiB each for `plugin.toml`, `README.md`, and `LICENSE`, and a 4096-byte signature limit. This repository's validator also caps `provenance.json` at 2 MiB.
@@ -40,6 +44,7 @@ Run package, manifest, and catalog checks with:
 
 ```sh
 python3 scripts/test_validate_manifests.py
+python3 scripts/test_plan_install.py
 python3 scripts/validate_manifests.py
 python3 scripts/test_validate_packages.py
 scripts/test_adapter_component_runtime.sh
