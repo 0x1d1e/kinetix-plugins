@@ -49,9 +49,22 @@ class SecurityFixtureTests(unittest.TestCase):
                 })
         # Prevent accidentally replacing the key risk vectors with only load tests.
         cases = {case["id"]: case for case in VECTORS["cases"]}
-        for name in ("http-undeclared", "http-unapproved", "plaintext-undeclared",
-                     "plaintext-unapproved", "credential-egress", "storage-aggregate"):
+        for name in ("http-undeclared", "http-unapproved", "http-partially-approved",
+                     "plaintext-undeclared", "plaintext-unapproved", "credential-egress",
+                     "storage-aggregate"):
             self.assertEqual(cases[name]["expect"]["outcome"], "deny")
+        partial = cases["http-partially-approved"]
+        self.assertEqual(partial["package"], "over-permission")
+        self.assertEqual(partial["approval"], "plaintext")
+        self.assertEqual(partial["operation"], {
+            "op": "http", "url": "https://other.fixture.invalid/",
+        })
+        self.assertEqual(partial["expect"]["http_requests"], 0)
+        self.assertIn("other.fixture.invalid",
+                      manifests[partial["package"]]["permissions"]["network_hosts"])
+        approved_hosts = VECTORS["approvals"][partial["approval"]]["network_hosts"]
+        self.assertIn("api.fixture.invalid", approved_hosts)
+        self.assertNotIn("other.fixture.invalid", approved_hosts)
         self.assertFalse(cases["sign-no-plaintext"]["expect"]["guest_contains_secret"])
         self.assertFalse(cases["error-redaction"]["expect"]["client_error_contains_secret"])
         self.assertEqual(cases["storage-at-limit"]["operation"]["bytes"], 16)

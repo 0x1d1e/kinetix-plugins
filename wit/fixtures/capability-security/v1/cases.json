@@ -21,6 +21,7 @@
   "cases": [
     {"id": "http-undeclared", "package": "denied", "approval": "scoped", "operation": {"op": "http", "url": "https://api.fixture.invalid/"}, "expect": {"outcome": "deny", "http_requests": 0}},
     {"id": "http-unapproved", "package": "scoped", "approval": "none", "operation": {"op": "http", "url": "https://api.fixture.invalid/"}, "expect": {"outcome": "deny", "http_requests": 0}},
+    {"id": "http-partially-approved", "package": "over-permission", "approval": "plaintext", "operation": {"op": "http", "url": "https://other.fixture.invalid/"}, "expect": {"outcome": "deny", "http_requests": 0}},
     {"id": "http-approved", "package": "scoped", "approval": "scoped", "operation": {"op": "http", "url": "https://API.FIXTURE.INVALID/", "bytes": 16}, "expect": {"outcome": "allow", "http_requests": 1, "body_bytes": 16, "truncated": true}},
     {"id": "http-suffix-confusion", "package": "scoped", "approval": "scoped", "operation": {"op": "http", "url": "https://api.fixture.invalid.attacker.invalid/"}, "expect": {"outcome": "deny", "http_requests": 0}},
     {"id": "http-wildcard-child", "package": "scoped", "approval": "scoped", "operation": {"op": "http", "url": "https://a.wild.fixture.invalid/"}, "expect": {"outcome": "allow", "http_requests": 1}},
