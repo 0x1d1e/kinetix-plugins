@@ -1,6 +1,6 @@
 [package]
 name = "kinetix-plugin-ai-studio"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Kinetix plugin: Google AI Studio setup and live model discovery."
 license = "MIT"

@@ -506,7 +506,7 @@ dependencies = [
 
 [[package]]
 name = "kinetix-plugin-ai-studio"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "kinetix-plugin-sdk",
  "serde",
@@ -515,7 +515,7 @@ dependencies = [
 
 [[package]]
 name = "kinetix-plugin-antigravity-oauth"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "kinetix-adapter-conformance",
  "kinetix-plugin-sdk",
@@ -525,7 +525,7 @@ dependencies = [
 
 [[package]]
 name = "kinetix-plugin-b-ai"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "kinetix-plugin-sdk",
  "serde",
@@ -534,7 +534,7 @@ dependencies = [
 
 [[package]]
 name = "kinetix-plugin-claude-code-oauth"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "kinetix-plugin-sdk",
  "serde",
@@ -552,7 +552,7 @@ dependencies = [
 
 [[package]]
 name = "kinetix-plugin-opencode-free"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "kinetix-adapter-conformance",
  "kinetix-plugin-sdk",
