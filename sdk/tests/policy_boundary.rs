@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use wit_parser::{Interface, Record, Resolve, TypeDefKind, World, WorldItem, WorldKey};
+use wit_parser::{Interface, Record, Resolve, Type, TypeDefKind, World, WorldItem, WorldKey};
 
 fn repo_path(relative: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -75,6 +75,23 @@ fn record_fields(
 
 fn names(values: &[&str]) -> BTreeSet<String> {
     values.iter().map(|value| (*value).to_owned()).collect()
+}
+
+fn has_optional_session_param(resolve: &Resolve, interface: &Interface, function: &str) -> bool {
+    let Some(function) = interface.functions.get(function) else {
+        return false;
+    };
+    let Some(param) = function.params.iter().find(|param| param.name == "session") else {
+        return false;
+    };
+    let Type::Id(option_id) = &param.ty else {
+        return false;
+    };
+    matches!(
+        &resolve.types[*option_id].kind,
+        TypeDefKind::Option(Type::Id(context_id))
+            if resolve.types[*context_id].name.as_deref() == Some("session-context")
+    )
 }
 
 #[test]
@@ -200,12 +217,12 @@ fn legacy_adapter_world_keeps_its_v1_import_contract() {
             "parse-full-response",
         ])
     );
-    // API v1 components retain this import for compatibility. The v2 adapter is import-free.
+    // API v1 components retain this import for compatibility.
     assert!(item_names(&resolve, adapter.imports.iter()).contains("host-http"));
 }
 
 #[test]
-fn v2_adapter_adds_session_context_without_policy_operations() {
+fn v2_adapter_retains_legacy_host_imports_and_session_context() {
     let mut resolve = Resolve::new();
     let (package, _) = resolve.push_dir(repo_path("wit/v2")).unwrap();
     let adapter = world(&resolve, package, "plugin-adapter-v2");
@@ -213,11 +230,17 @@ fn v2_adapter_adds_session_context_without_policy_operations() {
         item_names(&resolve, adapter.exports.iter()),
         names(&["provider-adapter"])
     );
-    assert!(
-        item_names(&resolve, adapter.imports.iter())
-            .iter()
-            .all(|name| !name.starts_with("host-")),
-        "v2 adapter must not import host capabilities"
+    assert_eq!(
+        item_names(&resolve, adapter.imports.iter()),
+        names(&[
+            "host-http",
+            "host-storage",
+            "host-log",
+            "host-credential",
+            "host-clock",
+            "types",
+        ]),
+        "API v2 host imports are part of its compatibility contract"
     );
     let operations: BTreeSet<_> = exported_interface(&resolve, adapter, "provider-adapter")
         .functions
@@ -236,4 +259,52 @@ fn v2_adapter_adds_session_context_without_policy_operations() {
             "parse-full-response",
         ])
     );
+    let provider = exported_interface(&resolve, adapter, "provider-adapter");
+    for function in ["apply-auth", "build-body"] {
+        assert!(
+            has_optional_session_param(&resolve, provider, function),
+            "API v2 {function} must accept optional session context"
+        );
+    }
+}
+
+#[test]
+fn v3_adapter_is_session_aware_and_import_free() {
+    let mut resolve = Resolve::new();
+    let (package, _) = resolve.push_dir(repo_path("wit/v3")).unwrap();
+    let adapter = world(&resolve, package, "plugin-adapter-v3");
+    assert_eq!(
+        item_names(&resolve, adapter.exports.iter()),
+        names(&["provider-adapter"])
+    );
+    assert!(
+        item_names(&resolve, adapter.imports.iter())
+            .iter()
+            .all(|name| !name.starts_with("host-")),
+        "v3 adapter must not import host capabilities"
+    );
+    let operations: BTreeSet<_> = exported_interface(&resolve, adapter, "provider-adapter")
+        .functions
+        .keys()
+        .cloned()
+        .collect();
+    assert_eq!(
+        operations,
+        names(&[
+            "wire-format",
+            "build-url",
+            "apply-auth",
+            "build-body",
+            "classify-error",
+            "parse-stream-chunk",
+            "parse-full-response",
+        ])
+    );
+    let provider = exported_interface(&resolve, adapter, "provider-adapter");
+    for function in ["apply-auth", "build-body"] {
+        assert!(
+            has_optional_session_param(&resolve, provider, function),
+            "API v3 {function} must accept optional session context"
+        );
+    }
 }

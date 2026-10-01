@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build and invoke the production Antigravity v2 adapter component with every
+# Build and invoke the production Antigravity v3 adapter component with every
 # host import configured to trap. This catches capability use hidden behind a
 # different generated WIT world.
 set -euo pipefail

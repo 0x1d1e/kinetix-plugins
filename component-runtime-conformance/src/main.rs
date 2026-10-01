@@ -16,7 +16,7 @@ fn main() -> Result<()> {
         .map_err(|error| anyhow!("load component {component_path}: {error}"))?;
 
     // Every unresolved host import traps if called. The production component
-    // also exports v1 worlds that import host storage, but the v2 adapter call
+    // also exports v1 worlds that import host storage, but the v3 adapter call
     // must complete without invoking any host capability.
     let mut linker = Linker::<()>::new(&engine);
     linker
@@ -28,14 +28,14 @@ fn main() -> Result<()> {
         .map_err(|error| anyhow!("instantiate component: {error}"))?;
 
     let adapter = instance
-        .get_export_index(&mut store, None, "kinetix:plugin/provider-adapter@2.0.0")
-        .context("component is missing the v2 provider-adapter export")?;
+        .get_export_index(&mut store, None, "kinetix:plugin/provider-adapter@3.0.0")
+        .context("component is missing the v3 provider-adapter export")?;
     let build_body_index = instance
         .get_export_index(&mut store, Some(&adapter), "build-body")
-        .context("v2 provider-adapter is missing build-body")?;
+        .context("v3 provider-adapter is missing build-body")?;
     let build_body = instance
         .get_func(&mut store, build_body_index)
-        .context("v2 build-body export is not a function")?;
+        .context("v3 build-body export is not a function")?;
 
     let request = r#"{"schema":"kinetix.plugin.request","schema_version":1,"messages":[]}"#;
     let provider = serde_json::json!({
@@ -57,7 +57,7 @@ fn main() -> Result<()> {
     let mut results = [Val::Result(Ok(None))];
     build_body
         .call(&mut store, &params, &mut results)
-        .map_err(|error| anyhow!("v2 build-body called a host capability or trapped: {error}"))?;
+        .map_err(|error| anyhow!("v3 build-body called a host capability or trapped: {error}"))?;
 
     let body = match &results[0] {
         Val::Result(Ok(Some(body))) => match body.as_ref() {
@@ -79,6 +79,6 @@ fn main() -> Result<()> {
         "adapter did not use the core-owned now_unix_millis context"
     );
 
-    println!("v2 build-body completed with every host import trapping");
+    println!("v3 build-body completed with every host import trapping");
     Ok(())
 }

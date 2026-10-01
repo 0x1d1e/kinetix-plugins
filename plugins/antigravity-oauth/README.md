@@ -20,7 +20,7 @@ provider.wire_plugin       = "plugin:dev.kinetix.antigravity-oauth/antigravity"
 
 ## Permissions
 
-The v2 adapter is a pure translator and has no host imports. Before `build-body`, Kinetix provides `_kinetix.project_id` from the selected account credential's non-secret project identity and `_kinetix.now_unix_millis` in `provider-json`; the adapter does not retrieve account state or time from host storage/clock capabilities.
+The v3 adapter is a pure translator and has no host imports. Before `build-body`, Kinetix provides `_kinetix.project_id` from the selected account credential's non-secret project identity and `_kinetix.now_unix_millis` in `provider-json`; the adapter does not retrieve account state or time from host storage/clock capabilities.
 
 The manifest requests:
 

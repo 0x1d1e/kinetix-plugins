@@ -2093,18 +2093,18 @@ impl exports::hooks::Guest for Component {
     }
 }
 
-// --- API v2 adapter world: the `v1internal` wire format. --------------------
+// --- API v3 adapter world: the `v1internal` wire format. --------------------
 //
-// This session-aware adapter is a separate WIT world. The main plugin,
-// authorization, and discovery exports remain API v1.
+// The session-aware, import-free adapter is a separate WIT world. The main
+// plugin, authorization, and discovery exports remain API v1.
 
-use adapter_world::exports::kinetix::plugin2_0_0::provider_adapter::Guest as ProviderAdapterGuest;
-use kinetix_plugin_sdk::adapter_v2 as adapter_world;
+use adapter_world::exports::kinetix::plugin3_0_0::provider_adapter::Guest as ProviderAdapterGuest;
+use kinetix_plugin_sdk::adapter_v3 as adapter_world;
 
 type AdapterPluginError = adapter_world::kinetix::plugin1_0_0::types::PluginError;
-type AdapterSessionContext = adapter_world::kinetix::plugin2_0_0::types::SessionContext;
+type AdapterSessionContext = adapter_world::kinetix::plugin3_0_0::types::SessionContext;
 
-/// Adapter error → the API v1 generated `PluginError` used by API v2.
+/// Adapter error → the API v1 generated `PluginError` used by API v3.
 fn adapter_err(e: crate::adapter::AdapterError) -> AdapterPluginError {
     AdapterPluginError {
         code: e.code,
@@ -2158,7 +2158,7 @@ impl ProviderAdapterGuest for Component {
     }
 }
 
-adapter_world::export!(Component with_types_in kinetix_plugin_sdk::adapter_v2);
+adapter_world::export!(Component with_types_in kinetix_plugin_sdk::adapter_v3);
 
 use kinetix_plugin_sdk::health as health_world;
 

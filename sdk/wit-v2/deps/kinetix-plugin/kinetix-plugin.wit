@@ -121,7 +121,8 @@ interface types {
     quota-snapshots: list<quota-snapshot-v1>,
   }
 
-  /// An opaque credential lease (§6.1). The handle is meaningful only to the
+  /// An opaque credential lease (§6.1).
+  /// The handle is meaningful only to the host.
   record credential-lease {
     handle: string,
     expires-at: option<string>,

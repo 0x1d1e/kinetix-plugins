@@ -6,7 +6,7 @@
 #   3. validate response contract fixtures (wit/fixtures/plugin-response/v1)
 #   4. cargo check --locked --workspace --target wasm32-unknown-unknown
 #   5. validate catalog.json / trusted-publishers.json
-#   6. runtime-check the compiled Antigravity v2 adapter component with host imports trapped
+#   6. runtime-check the compiled Antigravity v3 adapter component with host imports trapped
 #   7. validate plugins/*/plugin.toml manifests
 set -uo pipefail
 
