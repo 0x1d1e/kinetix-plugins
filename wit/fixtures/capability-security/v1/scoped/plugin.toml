@@ -1,0 +1,20 @@
+manifest_version = 1
+id = "dev.kinetix.security-fixture"
+name = "Security conformance fixture - do not install"
+version = "0.1.0"
+plugin_api = "1"
+
+[provides]
+health_probes = ["fixture"]
+
+[permissions]
+network_hosts = ["api.fixture.invalid", "other.fixture.invalid", "*.wild.fixture.invalid"]
+credential_scopes = ["provider:fixture"]
+credential_read = false
+
+[limits]
+memory = "32MiB"
+wall_time_ms = 1000
+max_outbound_requests = 2
+max_http_body = "16B"
+storage = "16B"

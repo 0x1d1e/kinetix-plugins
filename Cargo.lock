@@ -572,6 +572,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kinetix-plugin-security-fixture"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "leb128fmt"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

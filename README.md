@@ -92,6 +92,6 @@ A release does **not** automatically make a catalog entry installable. After the
 
 ## Compatibility
 
-The plugin ABI is defined by `wit/kinetix-plugin.wit`. Host-side ABI changes must be coordinated with the Kinetix repository before plugins are released against them.
+The plugin ABI is defined by `wit/kinetix-plugin.wit`. Host-side ABI changes must be coordinated with the Kinetix repository before plugins are released against them. Before adding host imports or another plugin runtime, read the [WASM capability security contract](docs/wasm-capability-security-v1.md) and run its consumer conformance fixtures.
 
 See [MIGRATION.md](MIGRATION.md) for the original extraction boundary and source revision.
