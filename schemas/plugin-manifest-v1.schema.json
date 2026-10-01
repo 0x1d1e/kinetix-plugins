@@ -79,6 +79,8 @@
         "name": { "type": "string", "minLength": 1 },
         "description": { "type": "string" },
         "credential_mode": { "enum": ["none", "manual", "auth_flow"] },
+        "manual_credential": { "$ref": "#/$defs/manualCredential" },
+        "install": { "$ref": "#/$defs/install" },
         "provider_adapter": { "type": "string", "minLength": 1 },
         "credential_strategy": { "type": "string", "minLength": 1 },
         "auth_flow": { "type": "string", "minLength": 1 },
@@ -86,6 +88,39 @@
         "features": { "$ref": "#/$defs/features" },
         "protocols": { "$ref": "#/$defs/protocols" },
         "provider": { "$ref": "#/$defs/provider" }
+      }
+    },
+    "manualCredential": {
+      "type": "object",
+      "required": ["kind", "requirements"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string", "pattern": "^[a-z0-9_-]{1,64}$", "description": "Credential kind understood by the host, not a secret or storage format." },
+        "requirements": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z0-9_-]{1,64}$" }, "description": "Named inputs to request from the user. No values or defaults." }
+      }
+    },
+    "install": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "account": {
+          "type": "object",
+          "required": ["name"],
+          "additionalProperties": false,
+          "properties": { "name": { "type": "string", "minLength": 1 } }
+        },
+        "routes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "model"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string", "pattern": "^[a-z0-9_-]{1,64}$" },
+              "model": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
       }
     },
     "features": {

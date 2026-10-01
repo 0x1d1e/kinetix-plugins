@@ -12,6 +12,11 @@ id = "ai-studio"
 name = "Google AI Studio"
 description = "Use Google AI Studio with native Gemini transport and live model discovery."
 model_source = "ai-studio-models"
+credential_mode = "manual"
+
+[integrations.manual_credential]
+kind = "api_key"
+requirements = ["api_key"]
 
 [integrations.features]
 schema_version = 1

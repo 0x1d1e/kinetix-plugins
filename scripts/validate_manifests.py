@@ -92,7 +92,7 @@ def validate_network_host(path: pathlib.Path, value: str) -> None:
         raise ValueError(f"{path}: network host {host!r}: IP literals are not allowed; declare a hostname")
 
 
-def validate_provider_template(path: pathlib.Path, integration: dict, provided: dict) -> None:
+def validate_provider_template(path: pathlib.Path, integration: dict) -> None:
     provider = integration.get("provider")
     if provider is None:
         return
@@ -200,14 +200,31 @@ def validate_source_semantics(path: pathlib.Path, data: dict) -> None:
             require(not (legacy and account), path, f"integration {integration_id} model_source {model_source!r} is declared as both legacy and account-aware")
 
         mode = integration.get("credential_mode")
+        manual = integration.get("manual_credential")
+        require(manual is None or mode == "manual", path, f"integration {integration_id}: manual_credential requires explicit manual credential mode")
         if mode == "auth_flow":
             require(bool(integration.get("auth_flow")) and bool(integration.get("credential_strategy")), path, f"integration {integration_id}: auth_flow credential mode requires auth_flow and credential_strategy")
         elif mode == "none":
             require(not integration.get("auth_flow") and not integration.get("credential_strategy"), path, f"integration {integration_id}: none credential mode cannot declare auth_flow or credential_strategy")
         elif mode == "manual":
             require(not integration.get("auth_flow"), path, f"integration {integration_id}: manual credential mode cannot declare auth_flow")
+            require(manual is not None, path, f"integration {integration_id}: manual credential mode requires manual_credential kind and requirements")
 
-        validate_provider_template(path, integration, provided)
+        install = integration.get("install")
+        if install is not None:
+            require(mode is not None, path, f"integration {integration_id}: install requires explicit credential_mode")
+            require(integration.get("provider") is not None, path, f"integration {integration_id}: install requires a provider template")
+            account = install.get("account")
+            require(account is None or mode != "none", path, f"integration {integration_id}: none credential mode cannot propose an account or credential")
+            if account is not None:
+                require(bool(account["name"].strip()), path, f"integration {integration_id}: account name must not be empty")
+            route_ids: set[str] = set()
+            for route in install.get("routes", []):
+                require(route["id"] not in route_ids, path, f"integration {integration_id}: duplicate install route id {route['id']}")
+                route_ids.add(route["id"])
+                require(bool(route["model"].strip()), path, f"integration {integration_id}: route model must not be empty")
+
+        validate_provider_template(path, integration)
 
     ui = data.get("ui", {})
     setting_keys: set[str] = set()
@@ -234,7 +251,8 @@ def validate_source_semantics(path: pathlib.Path, data: dict) -> None:
         action_ids.add(action_id)
         require(bool(action["label"].strip()), path, f"ui action {action_id!r} label must not be empty")
         integration = next((item for item in data.get("integrations", []) if item["id"] == action["integration"]), None)
-        require(integration is not None, path, f"ui action {action_id!r} references unknown integration {action['integration']!r}")
+        if integration is None:
+            raise ValueError(f"{path}: ui action {action_id!r} references unknown integration {action['integration']!r}")
         require(bool(integration.get("auth_flow")) and bool(integration.get("credential_strategy")), path, f"auth ui action {action_id!r} requires integration {integration['id']!r} to declare auth_flow and credential_strategy")
 
     network_hosts: set[str] = set()
@@ -265,14 +283,13 @@ def validate_source_semantics(path: pathlib.Path, data: dict) -> None:
             require(5_000 <= refresh <= 3_600_000, path, "routing_facts_refresh_ms must be 5000..=3600000 for cached routing facts")
 
 
-def validate_manifest(path: pathlib.Path, data: object) -> str:
+def validate_manifest(path: pathlib.Path, data: dict) -> str:
     errors = sorted(VALIDATOR.iter_errors(data), key=lambda error: list(map(str, error.absolute_path)))
     if errors:
         error = errors[0]
         location = ".".join(map(str, error.absolute_path)) or "manifest"
         raise ValueError(f"{path}: {location}: {error.message}")
 
-    assert isinstance(data, dict)
     validate_semver_component_bounds(path, data)
     validate_source_semantics(path, data)
     return data["id"]
@@ -289,7 +306,8 @@ def validate_plugin_directory(plugin_dir: pathlib.Path) -> tuple[str, str, str]:
         raise ValueError(f"{plugin_dir}: {error}") from error
 
     package = cargo.get("package")
-    require(isinstance(package, dict), cargo_path, "[package] table is required")
+    if not isinstance(package, dict):
+        raise ValueError(f"{cargo_path}: [package] table is required")
     crate_version = package.get("version")
     require(isinstance(crate_version, str), cargo_path, "[package].version must be a string")
     manifest_version = manifest["version"]

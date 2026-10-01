@@ -14,6 +14,7 @@ name = "Claude Code OAuth"
 description = "Connect an Anthropic Claude Code subscription using the Claude OAuth PKCE flow."
 credential_strategy = "claude-code-oauth"
 auth_flow = "claude-code"
+credential_mode = "auth_flow"
 
 [integrations.features]
 schema_version = 1

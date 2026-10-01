@@ -1,0 +1,73 @@
+{
+  "apply_requires_approval": true,
+  "objects": {
+    "accounts": [],
+    "credentials": [],
+    "integrations": [
+      {
+        "declaration": {
+          "credential_mode": "none",
+          "description": "Use OpenCode's anonymous free-tier models with dynamic model discovery.",
+          "features": {
+            "health_probe": false,
+            "model_discovery": true,
+            "parallel_tools": true,
+            "quota_probe": false,
+            "reasoning": true,
+            "schema_version": 1,
+            "streaming": true,
+            "structured_output": false,
+            "tools": true,
+            "vision": false
+          },
+          "id": "opencode-free",
+          "model_source": "opencode-free-models",
+          "name": "OpenCode Free",
+          "protocols": {
+            "input": [
+              "openai-chat",
+              "openai-responses",
+              "anthropic"
+            ],
+            "upstream": [
+              "plugin-native"
+            ]
+          },
+          "provider": {
+            "auth_scheme": "bearer",
+            "base_url": "https://opencode.ai",
+            "capability_mode": "permissive",
+            "follow_redirects": false,
+            "models_path": "/zen/v1/models",
+            "timeout_ms": 120000,
+            "wire_format": "plugin"
+          },
+          "provider_adapter": "opencode-free"
+        },
+        "ref": "integration/opencode-free"
+      }
+    ],
+    "routes": [
+      {
+        "integration": "integration/opencode-free",
+        "model": "big-pickle",
+        "ref": "route/opencode-free/example"
+      }
+    ]
+  },
+  "package": {
+    "id": "dev.kinetix.opencode-free",
+    "manifest_sha256": "d80d149d0cd4a51c40015bfdb439dfec5264da7b7617c3312f170e4d19b48f38",
+    "plugin_api": "2",
+    "version": "0.1.10"
+  },
+  "requested_permissions": {
+    "credential_read": false,
+    "credential_scopes": [],
+    "network_hosts": [
+      "opencode.ai"
+    ]
+  },
+  "schema_version": 1,
+  "traffic_enabled": false
+}

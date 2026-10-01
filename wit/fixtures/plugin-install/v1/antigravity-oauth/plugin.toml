@@ -80,3 +80,10 @@ wall_time_ms = 30000
 max_outbound_requests = 6
 max_http_body = "1MiB"
 storage = "1MiB"
+
+[integrations.install.account]
+name = "Example account"
+
+[[integrations.install.routes]]
+id = "example"
+model = "gemini-2.5-pro"
