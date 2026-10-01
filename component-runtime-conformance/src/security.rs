@@ -1,10 +1,33 @@
 //! Smoke-test the portable malicious components, not Kinetix host policy.
 use anyhow::{anyhow, bail, ensure, Context, Result};
-use std::path::PathBuf;
+use std::{collections::BTreeSet, path::PathBuf};
 use wasmtime::{
     component::{types::ComponentItem, Component, Linker, Resource, ResourceType, Val},
     Config, Engine, Store,
 };
+
+// Exact compiled import sets, including resource-only dependency interfaces.
+// Exclude only the plugin contract, not the forbidden kinetix:ambient interfaces.
+fn expected_ambient_imports(id: &str) -> Result<BTreeSet<&'static str>> {
+    let imports: &[&str] = match id {
+        "filesystem" | "host-paths" => &[
+            "wasi:filesystem/types@0.2.0",
+            "wasi:filesystem/preopens@0.2.0",
+        ],
+        "process-shell" => &["kinetix:ambient/process-shell"],
+        "environment" => &["wasi:cli/environment@0.2.0"],
+        "raw-sockets" => &[
+            "wasi:sockets/network@0.2.0",
+            "wasi:sockets/tcp@0.2.0",
+            "wasi:sockets/tcp-create-socket@0.2.0",
+        ],
+        "arbitrary-network" => &["wasi:http/types@0.2.0", "wasi:http/outgoing-handler@0.2.0"],
+        "system-credentials" => &["kinetix:ambient/system-credentials"],
+        "randomness" => &["wasi:random/random@0.2.0"],
+        _ => bail!("unknown ambient probe {id}"),
+    };
+    Ok(imports.iter().copied().collect())
+}
 
 // Test-only linker: accept inert types and dependency functions, optionally
 // withholding just the named authority-bearing operation. No native WASI.
@@ -103,6 +126,11 @@ fn main() -> Result<()> {
     let engine = Engine::new(&config).map_err(|e| anyhow!("{e:#}"))?;
     let probe_component = Component::from_file(&engine, directory.join("probe.wasm"))
         .map_err(|e| anyhow!("{e:#}"))?;
+    let contract_type = probe_component.component_type();
+    let contract_imports: BTreeSet<_> = contract_type
+        .imports(&engine)
+        .map(|(name, _)| name)
+        .collect();
     let mut linker = Linker::<()>::new(&engine);
     // Only the base probe's contract imports receive trapping implementations.
     // Compiled ambient components' forbidden imports remain unresolved.
@@ -125,6 +153,16 @@ fn main() -> Result<()> {
         let interface_name = ambient["import"].as_str().unwrap();
         let function_name = ambient["function"].as_str().unwrap();
         let component_type = component.component_type();
+        let actual_imports: BTreeSet<_> = component_type
+            .imports(&engine)
+            .map(|(name, _)| name)
+            .filter(|name| !contract_imports.contains(name))
+            .collect();
+        let expected_imports = expected_ambient_imports(id)?;
+        ensure!(
+            actual_imports == expected_imports,
+            "{id} has unexpected non-contract imports: expected {expected_imports:?}, got {actual_imports:?}"
+        );
         let Some(ComponentItem::ComponentInstance(interface)) = component_type
             .get_import(&engine, interface_name)
             .map(|item| item.ty)
@@ -148,7 +186,7 @@ fn main() -> Result<()> {
         ensure!(
             component_type
                 .imports(&engine)
-                .any(|(name, _)| !name.starts_with("kinetix:plugin/") && message.contains(name)),
+                .any(|(name, _)| !contract_imports.contains(name) && message.contains(name)),
             "{id} failed for an unrelated reason: {message}"
         );
         // All resource aliases and dependencies link. Withholding only the

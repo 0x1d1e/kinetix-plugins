@@ -1,14 +1,43 @@
 package kinetix:security-fixture;
 
-// Bindings use upstream WASI definitions, never hand-built instance types.
-world ambient {
+// Each probe has only its required interfaces and their upstream type dependencies.
+world ambient-filesystem {
   include kinetix:plugin/plugin@1.0.0;
   import wasi:filesystem/types@0.2.0;
   import wasi:filesystem/preopens@0.2.0;
-  import wasi:sockets/tcp-create-socket@0.2.0;
-  import wasi:http/outgoing-handler@0.2.0;
-  import wasi:cli/environment@0.2.0;
-  import wasi:random/random@0.2.0;
+}
+
+world ambient-host-paths {
+  include kinetix:plugin/plugin@1.0.0;
+  import wasi:filesystem/preopens@0.2.0;
+}
+
+world ambient-process-shell {
+  include kinetix:plugin/plugin@1.0.0;
   import kinetix:ambient/process-shell;
+}
+
+world ambient-environment {
+  include kinetix:plugin/plugin@1.0.0;
+  import wasi:cli/environment@0.2.0;
+}
+
+world ambient-raw-sockets {
+  include kinetix:plugin/plugin@1.0.0;
+  import wasi:sockets/tcp-create-socket@0.2.0;
+}
+
+world ambient-arbitrary-network {
+  include kinetix:plugin/plugin@1.0.0;
+  import wasi:http/outgoing-handler@0.2.0;
+}
+
+world ambient-system-credentials {
+  include kinetix:plugin/plugin@1.0.0;
   import kinetix:ambient/system-credentials;
+}
+
+world ambient-randomness {
+  include kinetix:plugin/plugin@1.0.0;
+  import wasi:random/random@0.2.0;
 }

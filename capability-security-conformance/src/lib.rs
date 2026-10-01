@@ -13,12 +13,32 @@ wit_bindgen::generate!({
     world: "plugin",
 });
 
+// Ambient fixture features are mutually exclusive: one component, one probe world.
 #[cfg(feature = "ambient")]
-wit_bindgen::generate!({
-    path: ["../wit", "wit"],
-    world: "kinetix:security-fixture/ambient",
-    generate_all,
-});
+macro_rules! ambient_bindings {
+    ($($feature:literal => $world:literal),+ $(,)?) => {
+        $(
+            #[cfg(feature = $feature)]
+            wit_bindgen::generate!({
+                path: ["../wit", "wit"],
+                world: $world,
+                generate_all,
+            });
+        )+
+    };
+}
+
+#[cfg(feature = "ambient")]
+ambient_bindings! {
+    "filesystem" => "kinetix:security-fixture/ambient-filesystem",
+    "host-paths" => "kinetix:security-fixture/ambient-host-paths",
+    "process-shell" => "kinetix:security-fixture/ambient-process-shell",
+    "environment" => "kinetix:security-fixture/ambient-environment",
+    "raw-sockets" => "kinetix:security-fixture/ambient-raw-sockets",
+    "arbitrary-network" => "kinetix:security-fixture/ambient-arbitrary-network",
+    "system-credentials" => "kinetix:security-fixture/ambient-system-credentials",
+    "randomness" => "kinetix:security-fixture/ambient-randomness",
+}
 
 struct Component;
 
