@@ -86,6 +86,8 @@ fn default_client_secret() -> String {
 const REFRESH_LEAD_MS: u64 = 5 * 60 * 1000;
 /// KV key prefix where the live access token is written for the host.
 const LEASE_KEY_PREFIX: &str = "lease:";
+/// KV key prefix where non-secret lease metadata is written for the host.
+const LEASE_METADATA_KEY_PREFIX: &str = "credential-metadata:";
 
 #[derive(serde::Deserialize, serde::Serialize, Default, Clone)]
 struct Credential {
@@ -334,10 +336,11 @@ impl exports::credential_strategy::Guest for Component {
             )
         })?;
 
-        // The host reads the live token back from its encrypted KV under the
-        // handle we return (§6.1); the token never appears in the return value.
+        // The host reads the live token and non-secret project metadata back
+        // from encrypted KV under this opaque lease handle. The token never
+        // appears in the return value.
         let handle = handle_for(&account);
-        kinetix_plugin_sdk::helpers::kv_put_string(&format!("{LEASE_KEY_PREFIX}{handle}"), &access)
+        persist_lease(&handle, &access, &project)
             .map_err(|e| kinetix_plugin_sdk::helpers::error("plugin_internal", e))?;
 
         Ok(CredentialLease {
@@ -483,10 +486,16 @@ pub(crate) fn project_state_key(provider_id: &str, account_id: &str) -> String {
 }
 
 fn persist_project(account: &AccountRef, project_id: &str) -> Result<(), String> {
-    kinetix_plugin_sdk::helpers::kv_put_string(
+    credential_storage_put(
         &project_state_key(&account.provider_id, &account.account_id),
         project_id,
     )
+}
+
+fn persist_lease(handle: &str, access_token: &str, project_id: &str) -> Result<(), String> {
+    credential_storage_put(&format!("{LEASE_KEY_PREFIX}{handle}"), access_token)?;
+    let metadata = serde_json::json!({ "project_id": project_id }).to_string();
+    credential_storage_put(&format!("{LEASE_METADATA_KEY_PREFIX}{handle}"), &metadata)
 }
 
 fn antigravity_metadata() -> serde_json::Value {
@@ -2909,6 +2918,22 @@ mod tests {
             project_state_key("provider", "account-a"),
             format!("project:{}", account_handle("provider", "account-a"))
         );
+    }
+
+    #[test]
+    fn credential_lease_stores_secret_and_project_metadata_separately() {
+        reset_test_credential_state();
+        persist_lease("opaque-handle", "access-token", "cloud-project").unwrap();
+
+        assert_eq!(
+            credential_storage_get("lease:opaque-handle").as_deref(),
+            Some("access-token")
+        );
+        let metadata = credential_storage_get("credential-metadata:opaque-handle").unwrap();
+        let metadata: serde_json::Value = serde_json::from_str(&metadata).unwrap();
+        assert_eq!(metadata["project_id"], "cloud-project");
+        assert!(!metadata.to_string().contains("access-token"));
+        reset_test_credential_state();
     }
 
     #[test]
