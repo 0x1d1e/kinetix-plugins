@@ -989,39 +989,40 @@ fn tool_result_part(p: &Value, name: &str, id: &str) -> Result<Value, AdapterErr
         .cloned()
         .into_iter()
         .collect::<Vec<_>>();
-    let content = p.get("content").unwrap_or(&Value::Null);
-    match content {
-        Value::String(value) => text.push(value.clone()),
-        Value::Object(_) => structured.push(content.clone()),
-        Value::Array(parts) if is_tool_result_content_parts(parts) => {
-            for part in parts {
-                match part.get("type").and_then(Value::as_str).unwrap_or("") {
-                    "text" => {
-                        if let Some(value) = part.get("text").and_then(Value::as_str) {
-                            text.push(value.to_owned());
+    if let Some(content) = p.get("content") {
+        match content {
+            Value::String(value) => text.push(value.clone()),
+            Value::Object(_) => structured.push(content.clone()),
+            Value::Array(parts) if is_tool_result_content_parts(parts) => {
+                for part in parts {
+                    match part.get("type").and_then(Value::as_str).unwrap_or("") {
+                        "text" => {
+                            if let Some(value) = part.get("text").and_then(Value::as_str) {
+                                text.push(value.to_owned());
+                            }
                         }
+                        "json" | "structured" | "structured_json" => {
+                            structured.push(
+                                part.get("json")
+                                    .or_else(|| part.get("value"))
+                                    .or_else(|| part.get("data"))
+                                    .cloned()
+                                    .ok_or_else(|| {
+                                        bad("structured tool-result part has no JSON value")
+                                    })?,
+                            );
+                        }
+                        kind @ ("image" | "image_url" | "document" | "document_url") => {
+                            media.push(tool_result_media_part(part, kind)?);
+                        }
+                        _ => return Err(unsupported_media("unknown", "unrecognized content part")),
                     }
-                    "json" | "structured" | "structured_json" => {
-                        structured.push(
-                            part.get("json")
-                                .or_else(|| part.get("value"))
-                                .or_else(|| part.get("data"))
-                                .cloned()
-                                .ok_or_else(|| {
-                                    bad("structured tool-result part has no JSON value")
-                                })?,
-                        );
-                    }
-                    kind @ ("image" | "image_url" | "document" | "document_url") => {
-                        media.push(tool_result_media_part(part, kind)?);
-                    }
-                    _ => return Err(unsupported_media("unknown", "unrecognized content part")),
                 }
             }
+            Value::Array(_) => structured.push(content.clone()),
+            Value::Null => structured.push(Value::Null),
+            _ => structured.push(content.clone()),
         }
-        Value::Array(_) => structured.push(content.clone()),
-        Value::Null => {}
-        _ => structured.push(content.clone()),
     }
     let structured = match structured.len() {
         0 => None,

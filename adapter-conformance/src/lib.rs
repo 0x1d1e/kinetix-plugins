@@ -610,6 +610,7 @@ fn check_tool_result_payloads(
 
     let mut request = parse_fixture(REQUEST_TOOL_CONTINUATION);
     for value in [
+        json!(null),
         json!({"exit_code":0}),
         json!([1, 2]),
         json!([{"type":"record","id":1}]),
@@ -645,6 +646,26 @@ fn check_tool_result_payloads(
                 "{context} lost JSON tool-result payload {value}: {body}"
             ));
         }
+    }
+
+    let mut absent_request = parse_fixture(REQUEST_TOOL_CONTINUATION);
+    absent_request["messages"][1]["parts"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("content");
+    let body = adapter
+        .build_body(&absent_request, &transport.provider, &transport.model)
+        .map_err(|error| format!("{context} rejected a tool result with no content: {error}"))?;
+    let absent_remains_empty = if transport.format == "antigravity" {
+        body.pointer("/request/contents/1/parts/0/functionResponse/response/result")
+            == Some(&json!(""))
+    } else {
+        open_code_tool_output(&body, &transport.format) == Some("")
+    };
+    if !absent_remains_empty {
+        return Err(format!(
+            "{context} changed the empty result for absent tool content: {body}"
+        ));
     }
 
     let mixed_parts = json!([

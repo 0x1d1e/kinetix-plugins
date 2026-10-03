@@ -950,6 +950,13 @@ fn tool_result_output_text(part: &Value) -> Result<String, AdapterError> {
     let output = tool_result_output(part)?;
     Ok(match output {
         Value::String(text) => text,
+        Value::Null
+            if part.get("content").is_some()
+                || part.get("structured_content").is_some()
+                || part.get("structuredContent").is_some() =>
+        {
+            Value::Null.to_string()
+        }
         Value::Null => String::new(),
         value => value.to_string(),
     })
