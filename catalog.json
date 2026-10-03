@@ -54,8 +54,8 @@
       "publisher": "Kinetix",
       "official": true,
       "homepage": "https://github.com/PrightCord/kinetix-plugins/tree/main/plugins/antigravity-oauth",
-      "latest_version": "0.1.15",
-      "artifact_name": "dev.kinetix.antigravity-oauth-0.1.15.kxp",
+      "latest_version": "0.1.16",
+      "artifact_name": "dev.kinetix.antigravity-oauth-0.1.16.kxp",
       "capabilities": [
         "credential_strategy",
         "auth_flow",
@@ -63,8 +63,8 @@
       ],
       "installable": true,
       "distribution": {
-        "url": "https://github.com/PrightCord/kinetix-plugins/releases/download/antigravity-oauth-v0.1.15/dev.kinetix.antigravity-oauth-0.1.15.kxp",
-        "sha256": "32a2a12e3202397358a6393e82989080769ddcf095e3d62549c15c7f3439283e",
+        "url": "https://github.com/PrightCord/kinetix-plugins/releases/download/antigravity-oauth-v0.1.16/dev.kinetix.antigravity-oauth-0.1.16.kxp",
+        "sha256": "66c2bd42f40558e0cf09f31f3321c8fa07bb3b3dcaa494159577012b5f76fc34",
         "publisher_key_id": "kinetix-official-v1",
         "allowed_hosts": [
           "github.com",
