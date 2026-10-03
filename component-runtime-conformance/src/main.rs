@@ -79,6 +79,44 @@ fn main() -> Result<()> {
         "adapter did not use the core-owned now_unix_millis context"
     );
 
-    println!("v3 build-body completed with every host import trapping");
+    let corpus: serde_json::Value = serde_json::from_str(include_str!(
+        "../../sdk/tests/fixtures/schema-compat/corpus.json"
+    ))?;
+    for case in corpus["cases"]
+        .as_array()
+        .context("missing schema corpus")?
+    {
+        let request = serde_json::json!({
+            "schema": "kinetix.plugin.request", "schema_version": 1,
+            "messages": [{"role": "user", "parts": [{"type": "text", "text": "Use this tool"}]}],
+            "tools": [{"name": case["name"], "parameters": case["schema"]}]
+        });
+        let provider = serde_json::json!({
+            "_kinetix": {"project_id": TEST_PROJECT_ID, "now_unix_millis": TEST_NOW_UNIX_MILLIS}
+        });
+        let params = [
+            Val::String(request.to_string()),
+            Val::String(provider.to_string()),
+            Val::String(model.into()),
+            Val::Option(None),
+        ];
+        build_body
+            .call(&mut store, &params, &mut results)
+            .map_err(|error| anyhow!("{}: build-body trapped: {error}", case["name"]))?;
+        let body = match &results[0] {
+            Val::Result(Ok(Some(value))) => match value.as_ref() {
+                Val::String(body) => serde_json::from_str::<serde_json::Value>(body)?,
+                other => bail!("{}: unexpected body {other:?}", case["name"]),
+            },
+            other => bail!("{}: schema request rejected: {other:?}", case["name"]),
+        };
+        ensure!(
+            body.pointer("/request/tools/0/functionDeclarations/0/parametersJsonSchema")
+                == Some(&case["expected"]),
+            "{}: unexpected upstream schema: {body}",
+            case["name"]
+        );
+    }
+    println!("v3 build-body and schema corpus completed with every host import trapping");
     Ok(())
 }

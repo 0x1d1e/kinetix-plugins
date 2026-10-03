@@ -1,0 +1,70 @@
+{
+  "cases": [
+    {
+      "name": "jev_evaluate",
+      "source": "k-jev tool contract: nested question records and tagged union (reduced to shape-bearing fields)",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "state": {},
+          "questions": {
+            "type": "object",
+            "minProperties": 1,
+            "maxProperties": 64,
+            "patternProperties": {
+              "^.*$": {
+                "anyOf": [
+                  {"type": "object", "properties": {"type": {"const": "noul"}, "instructions": {"type": "string", "minLength": 1, "maxLength": 4096}, "criteria": {"type": "object", "properties": {"true": {"type": "string"}, "false": {"type": "string"}}, "required": ["true", "false"], "additionalProperties": false}}, "required": ["type", "instructions", "criteria"], "additionalProperties": false},
+                  {"type": "object", "properties": {"type": {"const": "choice"}, "instructions": {"type": "string"}, "criteria": {"type": "object", "minProperties": 2, "maxProperties": 64, "patternProperties": {"^.*$": {"type": "string"}}}}, "required": ["type", "instructions", "criteria"], "additionalProperties": false},
+                  {"type": "object", "properties": {"type": {"const": "score"}, "instructions": {"type": "string"}, "criteria": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 10}}, "required": ["type", "instructions", "criteria"], "additionalProperties": false}
+                ]
+              }
+            }
+          }
+        },
+        "required": ["state", "questions"]
+      },
+      "expected": {
+        "type": "object",
+        "properties": {"state": {}, "questions": {"type": "object", "properties": {"_placeholder": {"type": "boolean", "description": "Optional placeholder; omit when unused."}}}},
+        "required": ["state", "questions"]
+      }
+    },
+    {
+      "name": "chrome_devtools_load",
+      "source": "Chrome DevTools loader tool contract",
+      "schema": {"type": "object", "properties": {"query": {"type": "string", "maxLength": 500}, "limit": {"type": "integer", "minimum": 1, "maximum": 5}}, "required": ["query"]},
+      "expected": {"type": "object", "properties": {"query": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 5}}, "required": ["query"]}
+    },
+    {
+      "name": "claude_code_tuple",
+      "source": "Representative Claude Code/MCP tuple-bearing tool, not a captured built-in contract",
+      "schema": {"type": "object", "properties": {"position": {"type": "array", "prefixItems": [{"type": "integer"}, {"type": "integer"}], "items": false, "minItems": 2, "maxItems": 2}}, "required": ["position"]},
+      "expected": {"type": "object", "properties": {"position": {"type": "array", "items": {"anyOf": [{"type": "integer"}, {"type": "integer"}]}}}, "required": ["position"]}
+    },
+    {
+      "name": "mcp_local_refs",
+      "source": "Representative MCP-generated definitions and annotations",
+      "schema": {"$schema": "https://json-schema.org/draft/2020-12/schema", "$defs": {"Path": {"type": "string", "description": "File path", "examples": ["src/main.rs"]}}, "properties": {"path": {"$ref": "#/$defs/Path"}}, "required": ["path"]},
+      "expected": {"type": "object", "properties": {"path": {"type": "string", "description": "File path"}}, "required": ["path"]}
+    },
+    {
+      "name": "typebox_record",
+      "source": "TypeBox Type.Record(Type.String(), Type.Number()) with a closed-record option",
+      "schema": {"type": "object", "properties": {"values": {"type": "object", "patternProperties": {"^(.*)$": {"type": "number"}}, "additionalProperties": false}}, "required": ["values"]},
+      "expected": {"type": "object", "properties": {"values": {"type": "object", "properties": {"_placeholder": {"type": "boolean", "description": "Optional placeholder; omit when unused."}}}}, "required": ["values"]}
+    },
+    {
+      "name": "zod_union",
+      "source": "Representative Zod union/nullable/const generation",
+      "schema": {"type": "object", "properties": {"action": {"oneOf": [{"const": "read"}, {"const": "write"}]}, "path": {"type": ["string", "null"]}}, "required": ["action"]},
+      "expected": {"type": "object", "properties": {"action": {"anyOf": [{"enum": ["read"]}, {"enum": ["write"]}]}, "path": {"type": ["string", "null"]}}, "required": ["action"]}
+    },
+    {
+      "name": "codex_shell",
+      "source": "Representative OpenAI/Codex shell tool contract",
+      "schema": {"type": "object", "properties": {"command": {"type": "array", "items": {"type": "string"}}, "timeout_ms": {"type": "integer", "minimum": "1"}, "workdir": {"type": "string"}}, "required": ["command"], "additionalProperties": false},
+      "expected": {"type": "object", "properties": {"command": {"type": "array", "items": {"type": "string"}}, "timeout_ms": {"type": "integer", "minimum": 1}, "workdir": {"type": "string"}}, "required": ["command"], "additionalProperties": false}
+    }
+  ]
+}

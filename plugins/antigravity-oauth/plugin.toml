@@ -1,7 +1,7 @@
 manifest_version = 1
 id = "dev.kinetix.antigravity-oauth"
 name = "Antigravity OAuth"
-version = "0.1.15"
+version = "0.1.16"
 plugin_api = "3"
 
 # Antigravity accounts are provisioned by a host-managed refresh-token exchange
@@ -48,6 +48,7 @@ base_url = "https://daily-cloudcode-pa.googleapis.com"
 wire_format = "plugin"
 auth_scheme = "bearer"
 timeout_ms = 120000
+# Host manifest enum retains this spelling; SDK maps it to compatible.
 capability_mode = "permissive"
 follow_redirects = false
 

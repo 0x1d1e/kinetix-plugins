@@ -18,6 +18,7 @@
 
 use std::collections::HashMap;
 
+use kinetix_plugin_sdk::schema::{self, SchemaMode, SchemaProfile};
 use serde_json::{json, Map, Value};
 
 /// The IDE fingerprint Antigravity expects (macOS on purpose, even on Linux).
@@ -259,11 +260,9 @@ fn provider_is_strict(provider: &Value) -> bool {
     provider.get("capability_mode").and_then(Value::as_str) == Some("strict")
 }
 
-/// Validation-only JSON Schema keywords Antigravity rejects and whose omission
-/// does not change an argument's shape. Permissive policy drops them
-/// recursively; strict policy rejects them. Keywords outside this list and the
-/// supported set stay fail-closed.
-const ANTIGRAVITY_DROPPABLE_SCHEMA_KEYWORDS: &[&str] = &[
+// Legacy constraint regressions. Production policy lives in sdk::schema.
+#[cfg(test)]
+const LEGACY_CONSTRAINT_FIXTURES: &[&str] = &[
     "minLength",
     "maxLength",
     "exclusiveMinimum",
@@ -274,20 +273,27 @@ const ANTIGRAVITY_DROPPABLE_SCHEMA_KEYWORDS: &[&str] = &[
     "multipleOf",
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+fn schema_mode(provider: &Value) -> Result<SchemaMode, AdapterError> {
+    let value = match provider.get("capability_mode") {
+        None => "compatible",
+        Some(Value::String(value)) => value,
+        Some(_) => {
+            return Err(err(
+                "invalid_configuration",
+                "capability_mode must be a string",
+            ))
+        }
+    };
+    value
+        .parse()
+        .map_err(|error: schema::SchemaError| err("invalid_configuration", error.to_string()))
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy)]
 enum SchemaPolicy {
     Permissive,
     Strict,
-}
-
-impl SchemaPolicy {
-    fn from_provider(provider: &Value) -> Self {
-        if provider_is_strict(provider) {
-            Self::Strict
-        } else {
-            Self::Permissive
-        }
-    }
 }
 
 fn validate_request_contract(req: &Value) -> Result<(), AdapterError> {
@@ -527,6 +533,7 @@ fn apply_thinking(
 }
 
 fn build_tool_declarations(req: &Value, provider: &Value) -> Result<Vec<Value>, AdapterError> {
+    let mode = schema_mode(provider)?;
     let mut declarations = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     if let Some(tools) = req.get("tools").and_then(Value::as_array) {
@@ -543,11 +550,8 @@ fn build_tool_declarations(req: &Value, provider: &Value) -> Result<Vec<Value>, 
             declarations.push(json!({
                 "name": name,
                 "description": tool.get("description").cloned().unwrap_or(Value::Null),
-                "parametersJsonSchema": sanitize_schema_with_policy(
-                    &parameters,
-                    &format!("tool '{}'", tool.get("name").and_then(Value::as_str).unwrap_or("")),
-                    SchemaPolicy::from_provider(provider),
-                )?,
+                "parametersJsonSchema": schema::translate(&parameters, SchemaProfile::Antigravity, mode)
+                    .map_err(|error| tool_schema_error(error, tool.get("name").and_then(Value::as_str).unwrap_or("")))?,
             }));
         }
     }
@@ -684,135 +688,11 @@ fn sanitize_function_name(name: &str) -> String {
     s
 }
 
-fn schema_error(path: &str, message: impl Into<String>) -> AdapterError {
+fn tool_schema_error(error: schema::SchemaError, name: &str) -> AdapterError {
     bad(format!(
-        "Antigravity tool schema at {path}: {}",
-        message.into()
-    ))
-}
-
-fn sanitize_schema_list(
-    value: &Value,
-    path: &str,
-    policy: SchemaPolicy,
-) -> Result<Vec<Value>, AdapterError> {
-    value
-        .as_array()
-        .ok_or_else(|| schema_error(path, "expected an array of schemas"))?
-        .iter()
-        .enumerate()
-        .map(|(index, schema)| sanitize_schema_node(schema, &format!("{path}[{index}]"), policy))
-        .collect()
-}
-
-fn tuple_variants_to_items(variants: Vec<Value>) -> Option<Value> {
-    match variants.len() {
-        0 => None,
-        1 => variants.into_iter().next(),
-        _ => Some(json!({ "anyOf": variants })),
-    }
-}
-
-fn merge_schema_maps(
-    target: &mut Map<String, Value>,
-    incoming: &Map<String, Value>,
-    path: &str,
-) -> Result<(), AdapterError> {
-    for (key, value) in incoming {
-        match key.as_str() {
-            "properties" | "$defs" => {
-                let source = value
-                    .as_object()
-                    .ok_or_else(|| schema_error(&format!("{path}.{key}"), "must be an object"))?;
-                let destination = target
-                    .entry(key.clone())
-                    .or_insert_with(|| json!({}))
-                    .as_object_mut()
-                    .expect("schema map initialized as object");
-                for (name, schema) in source {
-                    if let Some(previous) = destination.get(name) {
-                        if previous != schema {
-                            return Err(schema_error(
-                                &format!("{path}.{key}.{name}"),
-                                "conflicting allOf schemas cannot be represented safely",
-                            ));
-                        }
-                    } else {
-                        destination.insert(name.clone(), schema.clone());
-                    }
-                }
-            }
-            "required" => {
-                let source = value
-                    .as_array()
-                    .ok_or_else(|| schema_error(&format!("{path}.required"), "must be an array"))?;
-                let destination = target
-                    .entry("required".to_string())
-                    .or_insert_with(|| json!([]))
-                    .as_array_mut()
-                    .expect("required initialized as array");
-                for item in source {
-                    if !destination.contains(item) {
-                        destination.push(item.clone());
-                    }
-                }
-            }
-            "title" | "description" => {
-                target.entry(key.clone()).or_insert_with(|| value.clone());
-            }
-            _ => {
-                if let Some(previous) = target.get(key) {
-                    if previous != value {
-                        return Err(schema_error(
-                            &format!("{path}.{key}"),
-                            "conflicting allOf constraints cannot be represented safely",
-                        ));
-                    }
-                } else {
-                    target.insert(key.clone(), value.clone());
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn add_nullable_type(schema: &mut Map<String, Value>, path: &str) -> Result<(), AdapterError> {
-    if let Some(kind) = schema.get_mut("type") {
-        match kind {
-            Value::String(existing) if existing != "null" => {
-                *kind = json!([existing.clone(), "null"]);
-                return Ok(());
-            }
-            Value::Array(types) => {
-                if !types.iter().any(|value| value.as_str() == Some("null")) {
-                    types.push(json!("null"));
-                }
-                return Ok(());
-            }
-            Value::String(_) => return Ok(()),
-            _ => {
-                return Err(schema_error(
-                    path,
-                    "nullable requires a string or array type",
-                ))
-            }
-        }
-    }
-
-    if let Some(any_of) = schema.get_mut("anyOf").and_then(Value::as_array_mut) {
-        if !any_of
-            .iter()
-            .any(|branch| branch.get("type").and_then(Value::as_str) == Some("null"))
-        {
-            any_of.push(json!({ "type": "null" }));
-        }
-        return Ok(());
-    }
-
-    Err(schema_error(
-        path,
-        "nullable without type or anyOf cannot be normalized safely",
+        "Antigravity tool schema at tool '{name}'{}: {}",
+        error.path.strip_prefix('$').unwrap_or(&error.path),
+        error.message
     ))
 }
 
@@ -821,276 +701,23 @@ fn sanitize_schema(schema: &Value, root_path: &str) -> Result<Value, AdapterErro
     sanitize_schema_with_policy(schema, root_path, SchemaPolicy::Strict)
 }
 
+#[cfg(test)]
 fn sanitize_schema_with_policy(
     schema: &Value,
     root_path: &str,
     policy: SchemaPolicy,
 ) -> Result<Value, AdapterError> {
-    sanitize_schema_node(schema, root_path, policy)
-}
-
-fn sanitize_schema_node(
-    node: &Value,
-    path: &str,
-    policy: SchemaPolicy,
-) -> Result<Value, AdapterError> {
-    let map = node
-        .as_object()
-        .ok_or_else(|| schema_error(path, "schema nodes must be JSON objects"))?;
-    let mut out = Map::new();
-    let mut nullable = false;
-    let mut const_value: Option<Value> = None;
-    let mut all_of: Option<&Value> = None;
-    let mut prefix_items: Option<Vec<Value>> = None;
-    let mut boolean_items: Option<bool> = None;
-
-    for (key, value) in map {
-        match key.as_str() {
-            "$schema" | "$comment" | "strict" | "default" | "examples" | "example"
-            | "deprecated" | "readOnly" | "writeOnly" => {}
-
-            "definitions" | "$defs" => {
-                let definitions = value
-                    .as_object()
-                    .ok_or_else(|| schema_error(&format!("{path}.{key}"), "must be an object"))?;
-                let mut sanitized = Map::new();
-                for (name, schema) in definitions {
-                    sanitized.insert(
-                        name.clone(),
-                        sanitize_schema_node(schema, &format!("{path}.{key}.{name}"), policy)?,
-                    );
-                }
-                let mut incoming = Map::new();
-                incoming.insert("$defs".into(), Value::Object(sanitized));
-                merge_schema_maps(&mut out, &incoming, path)?;
-            }
-
-            "$ref" => {
-                let reference = value
-                    .as_str()
-                    .ok_or_else(|| schema_error(&format!("{path}.$ref"), "must be a string"))?;
-                let reference = reference
-                    .strip_prefix("#/definitions/")
-                    .map(|suffix| format!("#/$defs/{suffix}"))
-                    .unwrap_or_else(|| reference.to_string());
-                out.insert("$ref".into(), json!(reference));
-            }
-
-            "properties" => {
-                let properties = value.as_object().ok_or_else(|| {
-                    schema_error(&format!("{path}.properties"), "must be an object")
-                })?;
-                let mut sanitized = Map::new();
-                for (name, schema) in properties {
-                    sanitized.insert(
-                        name.clone(),
-                        sanitize_schema_node(schema, &format!("{path}.properties.{name}"), policy)?,
-                    );
-                }
-                out.insert("properties".into(), Value::Object(sanitized));
-            }
-
-            "items" => match value {
-                Value::Array(_) => {
-                    if policy == SchemaPolicy::Strict {
-                        return Err(schema_error(
-                            &format!("{path}.items"),
-                            "tuple-style items are unsupported by Antigravity",
-                        ));
-                    }
-                    // Legacy tuple items have an unrestricted tail when
-                    // additionalItems is omitted. Validate the tuple branches
-                    // recursively, then drop the positional constraint rather
-                    // than narrowing every element to their union.
-                    let _ = sanitize_schema_list(value, &format!("{path}.items"), policy)?;
-                }
-                Value::Object(_) => {
-                    out.insert(
-                        "items".into(),
-                        sanitize_schema_node(value, &format!("{path}.items"), policy)?,
-                    );
-                }
-                Value::Bool(allowed) => {
-                    boolean_items = Some(*allowed);
-                }
-                _ => {
-                    return Err(schema_error(
-                        &format!("{path}.items"),
-                        "must be a schema object, boolean, or array of schemas",
-                    ));
-                }
-            },
-
-            "prefixItems" => {
-                if policy == SchemaPolicy::Strict {
-                    return Err(schema_error(
-                        &format!("{path}.prefixItems"),
-                        "prefixItems is unsupported by Antigravity",
-                    ));
-                }
-                prefix_items = Some(sanitize_schema_list(
-                    value,
-                    &format!("{path}.prefixItems"),
-                    policy,
-                )?);
-            }
-
-            "anyOf" => {
-                out.insert(
-                    key.clone(),
-                    Value::Array(sanitize_schema_list(
-                        value,
-                        &format!("{path}.{key}"),
-                        policy,
-                    )?),
-                );
-            }
-
-            "oneOf" => {
-                if out.contains_key("anyOf") {
-                    return Err(schema_error(
-                        &format!("{path}.oneOf"),
-                        "cannot combine oneOf and anyOf safely",
-                    ));
-                }
-                out.insert(
-                    "anyOf".into(),
-                    Value::Array(sanitize_schema_list(
-                        value,
-                        &format!("{path}.oneOf"),
-                        policy,
-                    )?),
-                );
-            }
-
-            "allOf" => all_of = Some(value),
-            "const" => const_value = Some(value.clone()),
-
-            "additionalProperties" => {
-                let normalized = match value {
-                    Value::Bool(_) => value.clone(),
-                    Value::Object(_) => sanitize_schema_node(
-                        value,
-                        &format!("{path}.additionalProperties"),
-                        policy,
-                    )?,
-                    _ => {
-                        return Err(schema_error(
-                            &format!("{path}.additionalProperties"),
-                            "must be a boolean or schema object",
-                        ))
-                    }
-                };
-                out.insert("additionalProperties".into(), normalized);
-            }
-
-            "nullable" => {
-                nullable = value.as_bool().ok_or_else(|| {
-                    schema_error(&format!("{path}.nullable"), "must be a boolean")
-                })?;
-            }
-
-            "pattern" => {
-                value
-                    .as_str()
-                    .ok_or_else(|| schema_error(&format!("{path}.pattern"), "must be a string"))?;
-                out.insert(key.clone(), value.clone());
-            }
-
-            "$id" | "$anchor" | "type" | "title" | "description" | "enum" | "minimum"
-            | "maximum" | "required" | "propertyOrdering" => {
-                out.insert(key.clone(), value.clone());
-            }
-
-            key if ANTIGRAVITY_DROPPABLE_SCHEMA_KEYWORDS.contains(&key) => {
-                if policy == SchemaPolicy::Strict {
-                    return Err(schema_error(
-                        &format!("{path}.{key}"),
-                        format!("unsupported JSON Schema keyword '{key}'"),
-                    ));
-                }
-                // Permissive: documented compatibility policy. These are
-                // validation-only constraints Antigravity rejects; omitting
-                // them does not change the argument's shape.
-            }
-
-            other => {
-                return Err(schema_error(
-                    &format!("{path}.{other}"),
-                    format!("unsupported JSON Schema keyword '{other}'"),
-                ));
-            }
-        }
-    }
-
-    if let Some(value) = const_value {
-        if let Some(existing) = out.get("enum").and_then(Value::as_array) {
-            if !existing.contains(&value) {
-                return Err(schema_error(
-                    &format!("{path}.const"),
-                    "const conflicts with enum",
-                ));
-            }
-        }
-        out.insert("enum".into(), Value::Array(vec![value]));
-    }
-
-    if let Some(branches) = all_of {
-        let sanitized = sanitize_schema_list(branches, &format!("{path}.allOf"), policy)?;
-        let mut merged = Map::new();
-        for (index, branch) in sanitized.iter().enumerate() {
-            let branch = branch.as_object().ok_or_else(|| {
-                schema_error(
-                    &format!("{path}.allOf[{index}]"),
-                    "allOf branch must be an object schema",
-                )
-            })?;
-            merge_schema_maps(&mut merged, branch, &format!("{path}.allOf[{index}]"))?;
-        }
-        merge_schema_maps(&mut out, &merged, path)?;
-    }
-
-    if let Some(mut variants) = prefix_items {
-        if let Some(items) = out.remove("items") {
-            // Positional prefix + homogeneous tail cannot be represented
-            // directly. Union both sides as a safe widening.
-            variants.push(items);
-            if let Some(items) = tuple_variants_to_items(variants) {
-                out.insert("items".into(), items);
-            }
-        } else if boolean_items == Some(false) {
-            // Closed tuple: widen the positional schemas into a homogeneous
-            // union.
-            if let Some(items) = tuple_variants_to_items(variants) {
-                out.insert("items".into(), items);
-            }
-            // The closed length (maxItems) is not representable upstream;
-            // it is dropped like any other maxItems under permissive policy.
-        }
-        // Omitted / true items means an unrestricted tail. Dropping
-        // prefixItems is lossy but permissive; synthesizing homogeneous items
-        // would incorrectly narrow valid trailing elements.
-    } else if let Some(allowed) = boolean_items {
-        if policy == SchemaPolicy::Strict || !allowed {
-            return Err(schema_error(
-                &format!("{path}.items"),
-                "boolean items are unsupported by Antigravity without prefixItems",
-            ));
-        }
-    }
-
-    if nullable {
-        add_nullable_type(&mut out, path)?;
-    }
-
-    if out.contains_key("$ref") && out.keys().any(|key| !key.starts_with('$')) {
-        return Err(schema_error(
-            path,
-            "$ref cannot be combined with non-$ sibling constraints",
-        ));
-    }
-
-    Ok(Value::Object(out))
+    let mode = match policy {
+        SchemaPolicy::Strict => SchemaMode::Strict,
+        SchemaPolicy::Permissive => SchemaMode::Compatible,
+    };
+    schema::translate(schema, SchemaProfile::Antigravity, mode).map_err(|error| {
+        bad(format!(
+            "Antigravity tool schema at {root_path}{}: {}",
+            error.path.strip_prefix('$').unwrap_or(&error.path),
+            error.message
+        ))
+    })
 }
 
 /// Convert one internal part to a Gemini part.
@@ -1913,6 +1540,33 @@ mod tests {
     }
 
     #[test]
+    fn shared_schema_policy_default_and_aliases() {
+        let corpus: Value = serde_json::from_str(include_str!(
+            "../../../sdk/tests/fixtures/schema-compat/corpus.json"
+        ))
+        .unwrap();
+        let case = &corpus["cases"][0];
+        let request = json!({"tools": [{"name": case["name"], "parameters": case["schema"]}]});
+        for provider in [
+            json!({}),
+            json!({"capability_mode": "compatible"}),
+            json!({"capability_mode": "permissive"}),
+        ] {
+            let declarations = build_tool_declarations(&request, &provider).unwrap();
+            assert_eq!(declarations[0]["parametersJsonSchema"], case["expected"]);
+        }
+        let error =
+            build_tool_declarations(&request, &json!({"capability_mode": "strict"})).unwrap_err();
+        assert_eq!(error.code, "bad_request");
+        assert!(error.message.contains("tool 'jev_evaluate'"));
+        for value in [json!("mystery"), json!(7)] {
+            let error =
+                build_tool_declarations(&request, &json!({"capability_mode": value})).unwrap_err();
+            assert_eq!(error.code, "invalid_configuration");
+        }
+    }
+
+    #[test]
     fn tool_schema_preserves_existing_normalization() {
         let schema = json!({
             "$ref": "#/definitions/Envelope",
@@ -1946,21 +1600,19 @@ mod tests {
         });
         let got = sanitize_schema(&schema, "tool 'fixture'").unwrap();
 
-        assert_eq!(got["$ref"], "#/$defs/Envelope");
+        assert!(got.get("$ref").is_none());
+        assert!(got.get("$defs").is_none());
+        assert_eq!(got.pointer("/additionalProperties"), Some(&json!(false)));
         assert_eq!(
-            got.pointer("/$defs/Envelope/additionalProperties"),
-            Some(&json!(false))
-        );
-        assert_eq!(
-            got.pointer("/$defs/Payload/properties/kind/enum"),
+            got.pointer("/properties/payload/properties/kind/enum"),
             Some(&json!(["ok"]))
         );
         assert_eq!(
-            got.pointer("/$defs/Payload/properties/choice/anyOf/1/type"),
+            got.pointer("/properties/payload/properties/choice/anyOf/1/type"),
             Some(&json!("number"))
         );
         assert_eq!(
-            got.pointer("/$defs/Payload/properties/list/items/type"),
+            got.pointer("/properties/payload/properties/list/items/type"),
             Some(&json!("integer"))
         );
     }
@@ -2089,8 +1741,14 @@ mod tests {
         let got = sanitize_schema_with_policy(&schema, "tool 'fixture'", SchemaPolicy::Permissive)
             .unwrap();
 
-        assert!(got.pointer("/properties/legacy_tuple/items").is_none());
-        assert!(got.pointer("/properties/explicit_tuple/items").is_none());
+        assert_eq!(
+            got.pointer("/properties/legacy_tuple/items"),
+            Some(&json!({}))
+        );
+        assert_eq!(
+            got.pointer("/properties/explicit_tuple/items"),
+            Some(&json!({}))
+        );
         assert!(got
             .pointer("/properties/explicit_tuple/prefixItems")
             .is_none());
@@ -2110,7 +1768,7 @@ mod tests {
         let got = sanitize_schema_with_policy(&schema, "tool 'fixture'", SchemaPolicy::Permissive)
             .unwrap();
 
-        assert!(got.pointer("/items").is_none());
+        assert_eq!(got.pointer("/items"), Some(&json!({})));
         assert!(got.pointer("/prefixItems").is_none());
     }
 
@@ -2260,7 +1918,7 @@ mod tests {
 
     #[test]
     fn permissive_drops_known_unsupported_schema_constraints() {
-        for keyword in ANTIGRAVITY_DROPPABLE_SCHEMA_KEYWORDS {
+        for keyword in LEGACY_CONSTRAINT_FIXTURES {
             let schema = droppable_fixture(keyword);
             let got =
                 sanitize_schema_with_policy(&schema, "tool 'fixture'", SchemaPolicy::Permissive)
@@ -2275,7 +1933,7 @@ mod tests {
 
     #[test]
     fn strict_rejects_known_unsupported_schema_constraints_with_path() {
-        for keyword in ANTIGRAVITY_DROPPABLE_SCHEMA_KEYWORDS {
+        for keyword in LEGACY_CONSTRAINT_FIXTURES {
             let schema = droppable_fixture(keyword);
             let error = sanitize_schema(&schema, "tool 'fixture'").unwrap_err();
             assert_eq!(error.code, "bad_request");
@@ -2291,7 +1949,7 @@ mod tests {
 
     #[test]
     fn permissive_still_rejects_unknown_schema_keywords() {
-        for keyword in ["propertyNames", "contains", "unevaluatedProperties"] {
+        for keyword in ["unknownKeyword", "futureConstraint", "vendorMagic"] {
             let schema = json!({
                 "type": "object",
                 "properties": { "v": { "type": "string", keyword: { "type": "string" } } }
@@ -2350,13 +2008,13 @@ mod tests {
     fn permissive_tool_schema_still_rejects_unknown_keywords() {
         let schema = json!({
             "type": "object",
-            "propertyNames": { "type": "string" }
+            "vendorMagic": { "type": "string" }
         });
         let error =
             sanitize_schema_with_policy(&schema, "tool 'fixture'", SchemaPolicy::Permissive)
                 .unwrap_err();
         assert_eq!(error.code, "bad_request");
-        assert!(error.message.contains("propertyNames"));
+        assert!(error.message.contains("vendorMagic"));
     }
 
     #[test]

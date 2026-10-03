@@ -31,6 +31,27 @@ Keep existing plugins on `plugin_api = "1"` and the `adapter` bindings. Existing
 
 Use the SDK's versioned model capability types for `DiscoveredModel.capabilities_json`, and declare integration-wide features and protocols in `plugin.toml`. See [plugin capability contracts](../docs/plugin-capabilities.md) for scope, validation, and compatibility details. The WIT field remains an optional string, so plugin API v1 is unchanged.
 
+## Tool-schema compatibility
+
+Protocol translation belongs to plugins. Core retains the canonical client schema; adapters select an SDK profile and policy:
+
+```rust,ignore
+use kinetix_plugin_sdk::schema::{self, SchemaMode, SchemaProfile};
+let parameters = schema::translate(&parameters, SchemaProfile::Antigravity, SchemaMode::Compatible)?;
+```
+
+`Strict` preserves or translates losslessly, otherwise rejects. `Compatible` allows the profile's lossy transformations. `permissive` parses as a backwards-compatible alias. This policy is independent of an upstream `strict: true` tool flag.
+
+Antigravity's `v1internal` profile inlines acyclic root-local references, converts `const` to `enum`, normalizes nullable schemas and safely merges `allOf`. Conflicting intersections, scoped references and recursive references are rejected rather than overwritten. Compatible mode widens `oneOf` to `anyOf` and positional tuples to homogeneous items, strips unsupported validation features (including string/object/array bounds and `patternProperties`), cleans invalid required entries, and repairs typed empty objects with an optional `_placeholder` boolean property. Stripping `patternProperties` also removes its `additionalProperties` fallback so formerly matching dynamic keys are not newly forbidden. Such repairs can weaken validation or change available argument shapes; clients must still validate tool arguments against their original schema. Strict mode rejects overlapping exclusive unions, tuple approximation and placeholder repairs.
+
+Missing array items become `{}`, preserving unrestricted elements. An unconstrained value schema `{}` remains unconstrained; it is not a typed empty object. Names under `properties` and values inside `enum`, defaults and examples are data, never schema keywords. Both modes reject unknown keywords and invalid keyword values. Reference expansion and traversal are bounded.
+
+`Gemini` targets Google's JSON Schema `parametersJsonSchema`, not its legacy OpenAPI `parameters` field. `OpenAI`, `Anthropic` and `OpenAICompatible` target ordinary, non-strict JSON Schema tool inputs. These profiles currently preserve known JSON Schema validation features and recursive local references; they do not inherit Antigravity's degradation. They are not certifications of every model's accepted subset. Constrained-decoding modes and endpoint-specific restrictions need separately verified profiles, not guessed stripping rules. Only Antigravity is wired into a plugin in this release; host-native adapters are unchanged.
+
+Profile references: [Gemini function declarations](https://ai.google.dev/api/generate-content#FunctionDeclaration), [OpenAI function calling](https://platform.openai.com/docs/guides/function-calling), [Anthropic tool definitions](https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/implement-tool-use). Antigravity's compatibility passes draw on [OmniRoute's Gemini helper](https://github.com/diegosouzapw/OmniRoute/blob/main/open-sse/translator/helpers/geminiHelper.ts), but retain the existing adapter's JSON Schema behavior for `pattern`, `anyOf`, type unions and `additionalProperties` instead of copying legacy OpenAPI-field degradation.
+
+`sdk/tests/schema_compat.rs` tests exact upstream schemas and forbidden fields using `sdk/tests/fixtures/schema-compat/corpus.json`. Fixture provenance distinguishes real tool contracts from representative generated shapes. The compiled v3 adapter replays the same corpus in `scripts/test_adapter_component_runtime.sh`.
+
 ## OAuth lifecycle
 
 `kinetix_plugin_sdk::oauth` provides provider-neutral helpers for checked expiry arithmetic, RFC3339 expiry parsing, token-response validation and rotation, persisted credential state, and refresh-error classification. Providers still own their authorization protocol and KV key selection.
