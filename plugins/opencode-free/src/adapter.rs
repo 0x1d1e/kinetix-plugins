@@ -931,8 +931,8 @@ fn tool_result_output(part: &Value) -> Result<Value, AdapterError> {
         .get("structured_content")
         .or_else(|| part.get("structuredContent"));
 
-    for value in content.into_iter().chain(structured) {
-        validate_tool_result_media(value)?;
+    if let Some(content) = content {
+        validate_tool_result_media(content)?;
     }
 
     Ok(match (content, structured) {
@@ -969,26 +969,49 @@ fn validate_tool_result_media(value: &Value) -> Result<(), AdapterError> {
         "file_url",
     ];
 
+    fn validate_part(part: &Value, media_types: &[&str]) -> Result<(), AdapterError> {
+        let Some(object) = part.as_object() else {
+            return Ok(());
+        };
+        let Some(kind) = object.get("type").and_then(Value::as_str) else {
+            return Ok(());
+        };
+        if !media_types.contains(&kind) {
+            return Ok(());
+        }
+        let payload_keys: &[&str] = if kind.ends_with("_url") {
+            &["url", "uri"]
+        } else {
+            &["data", "url", "uri"]
+        };
+        let has_direct_payload = payload_keys
+            .iter()
+            .any(|key| object.get(*key).is_some_and(Value::is_string));
+        let has_source_payload =
+            object
+                .get("source")
+                .and_then(Value::as_object)
+                .is_some_and(|source| {
+                    payload_keys
+                        .iter()
+                        .any(|key| source.get(*key).is_some_and(Value::is_string))
+                });
+        if has_direct_payload || has_source_payload {
+            return Err(err(
+                "unsupported_media",
+                format!("OpenCode transport does not support {kind} tool-result media"),
+            ));
+        }
+        Ok(())
+    }
+
     match value {
-        Value::Array(values) => {
-            for value in values {
-                validate_tool_result_media(value)?;
+        Value::Array(parts) => {
+            for part in parts {
+                validate_part(part, MEDIA_TYPES)?;
             }
         }
-        Value::Object(object) => {
-            if let Some(kind) = object.get("type").and_then(Value::as_str) {
-                if MEDIA_TYPES.contains(&kind) {
-                    return Err(err(
-                        "unsupported_media",
-                        format!("OpenCode transport does not support {kind} tool-result media"),
-                    ));
-                }
-            }
-            for value in object.values() {
-                validate_tool_result_media(value)?;
-            }
-        }
-        _ => {}
+        part => validate_part(part, MEDIA_TYPES)?,
     }
     Ok(())
 }

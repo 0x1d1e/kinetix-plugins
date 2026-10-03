@@ -943,28 +943,41 @@ fn tool_result_media_part(part: &Value, kind: &str) -> Result<Value, AdapterErro
     Ok(json!({ "inlineData": { "mimeType": mime, "data": data } }))
 }
 
-fn is_tool_result_content_parts(parts: &[Value]) -> bool {
-    const PART_TYPES: &[&str] = &[
-        "text",
-        "json",
-        "structured",
-        "structured_json",
-        "image",
-        "image_url",
-        "document",
-        "document_url",
-        "audio",
-        "audio_url",
-        "video",
-        "video_url",
-    ];
-
-    !parts.is_empty()
-        && parts.iter().all(|part| {
-            part.get("type")
-                .and_then(Value::as_str)
-                .is_some_and(|kind| PART_TYPES.contains(&kind))
+fn is_tool_result_content_part(part: &Value) -> bool {
+    let Some(object) = part.as_object() else {
+        return false;
+    };
+    let Some(kind) = object.get("type").and_then(Value::as_str) else {
+        return false;
+    };
+    let has_any = |keys: &[&str]| keys.iter().any(|key| object.contains_key(*key));
+    let has_string = |keys: &[&str]| {
+        keys.iter()
+            .any(|key| object.get(*key).is_some_and(Value::is_string))
+    };
+    let source = object.get("source").and_then(Value::as_object);
+    let source_has_string = |keys: &[&str]| {
+        source.is_some_and(|source| {
+            keys.iter()
+                .any(|key| source.get(*key).is_some_and(Value::is_string))
         })
+    };
+
+    match kind {
+        "text" => object.get("text").is_some_and(Value::is_string),
+        "json" | "structured" | "structured_json" => has_any(&["json", "value", "data"]),
+        "image" | "document" | "audio" | "video" => {
+            has_string(&["data", "url", "uri"]) || source_has_string(&["data", "url", "uri"])
+        }
+        "image_url" | "document_url" | "audio_url" | "video_url" => {
+            has_string(&["url", "uri"]) || source_has_string(&["url", "uri"])
+        }
+        _ => false,
+    }
+}
+
+fn is_tool_result_content_parts(parts: &[Value]) -> bool {
+    !parts.is_empty() && parts.iter().all(is_tool_result_content_part)
 }
 
 fn tool_result_part(p: &Value, name: &str, id: &str) -> Result<Value, AdapterError> {

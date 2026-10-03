@@ -613,6 +613,11 @@ fn check_tool_result_payloads(
         json!({"exit_code":0}),
         json!([1, 2]),
         json!([{"type":"record","id":1}]),
+        json!([{"type":"text","id":1}]),
+        json!([{"type":"image","id":1}]),
+        json!({"type":"image","data":null}),
+        json!({"type":"image","mime":"image/png","id":1}),
+        json!([{"type":"image","mime":"image/png","id":1}]),
         json!([]),
     ] {
         request["messages"][1]["parts"][0]["content"] = value.clone();
@@ -683,6 +688,39 @@ fn check_tool_result_payloads(
         return Err(format!("{context} lost structured_content: {body}"));
     }
 
+    if transport.format != "antigravity" {
+        let content_record = json!({"type":"file","path":"README.md"});
+        request["messages"][1]["parts"][0]["content"] = content_record.clone();
+        request["messages"][1]["parts"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("structured_content");
+        let body = adapter
+            .build_body(&request, &transport.provider, &transport.model)
+            .map_err(|error| format!("{context} rejected opaque content JSON: {error}"))?;
+        if open_code_tool_output(&body, &transport.format)
+            .and_then(|output| serde_json::from_str::<Value>(output).ok())
+            != Some(content_record)
+        {
+            return Err(format!("{context} changed opaque content JSON: {body}"));
+        }
+
+        let structured_record = json!({"record":{"type":"image","id":1}});
+        request["messages"][1]["parts"][0]["content"] = json!("result");
+        request["messages"][1]["parts"][0]["structured_content"] = structured_record.clone();
+        let body = adapter
+            .build_body(&request, &transport.provider, &transport.model)
+            .map_err(|error| format!("{context} rejected opaque structured_content: {error}"))?;
+        if open_code_tool_output(&body, &transport.format)
+            .and_then(|output| serde_json::from_str::<Value>(output).ok())
+            != Some(json!({"content":"result","structured_content":structured_record}))
+        {
+            return Err(format!(
+                "{context} changed opaque structured_content: {body}"
+            ));
+        }
+    }
+
     let text_parts = json!([{"type":"text","text":"result text"}]);
     request["messages"][1]["parts"][0]["content"] = text_parts.clone();
     request["messages"][1]["parts"][0]
@@ -739,10 +777,6 @@ fn check_tool_result_payloads(
             "image media",
             json!([{"type":"image","mime":"image/png","data":"QUJD"}]),
         ),
-        (
-            "nested media",
-            json!({"nested":[{"type":"image","mime":"image/png","data":"QUJD"}]}),
-        ),
     ] {
         request["messages"][1]["parts"][0]["content"] = content;
         match adapter.build_body(&request, &transport.provider, &transport.model) {
@@ -760,21 +794,31 @@ fn check_tool_result_payloads(
                     return Err(format!("{context} lost supported image media: {body}"));
                 }
             }
-            Ok(body) if transport.format == "antigravity" && kind == "nested media" => {
-                // Nested JSON is an opaque structured result for Gemini, not a media part.
-                if body
-                    .pointer("/request/contents/1/parts/0/functionResponse/response/nested/0/type")
-                    != Some(&json!("image"))
-                {
-                    return Err(format!("{context} lost nested structured JSON: {body}"));
-                }
-            }
             Ok(body) => {
                 return Err(format!(
                     "{context} silently accepted unsupported {kind} in a function response: {body}"
                 ))
             }
         }
+    }
+
+    let nested_media = json!({
+        "nested":[{"type":"image","mime":"image/png","data":"QUJD"}]
+    });
+    request["messages"][1]["parts"][0]["content"] = nested_media.clone();
+    let body = adapter
+        .build_body(&request, &transport.provider, &transport.model)
+        .map_err(|error| format!("{context} rejected opaque nested JSON: {error}"))?;
+    let preserved = if transport.format == "antigravity" {
+        body.pointer("/request/contents/1/parts/0/functionResponse/response/nested/0/type")
+            == Some(&json!("image"))
+    } else {
+        open_code_tool_output(&body, &transport.format)
+            .and_then(|output| serde_json::from_str::<Value>(output).ok())
+            == Some(nested_media)
+    };
+    if !preserved {
+        return Err(format!("{context} changed opaque nested JSON: {body}"));
     }
 
     if transport.format == "antigravity" {
