@@ -515,7 +515,7 @@ dependencies = [
 
 [[package]]
 name = "kinetix-plugin-antigravity-oauth"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "kinetix-adapter-conformance",
  "kinetix-plugin-sdk",
