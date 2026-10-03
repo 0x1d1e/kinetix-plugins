@@ -111,13 +111,15 @@ run_step "Validate plugin metadata and package contract" validate_plugin_metadat
 run_step "Check host contract mirror" python3 scripts/sync_host_contract.py --check || overall=1
 
 printf '\n%sSummary%s\n' "$CYAN" "$RESET"
-printf '%-28s %s\n' "Step" "Status"
-printf '%-28s %s\n' "----------------------------" "--------"
+width=4
+for name in "${STEP_NAMES[@]}"; do (( ${#name} > width )) && width=${#name}; done
+printf '%-*s %s\n' "$width" "Step" "Status"
+printf '%-*s %s\n' "$width" "$(printf "%*s" "$width" "" | tr " " -)" "--------"
 for i in "${!STEP_NAMES[@]}"; do
   if [[ "${STEP_RESULTS[$i]}" == "0" ]]; then
-    printf '%-28s %s✓ passed%s\n' "${STEP_NAMES[$i]}" "$GREEN" "$RESET"
+    printf '%-*s %s✓ passed%s\n' "$width" "${STEP_NAMES[$i]}" "$GREEN" "$RESET"
   else
-    printf '%-28s %s✗ failed%s\n' "${STEP_NAMES[$i]}" "$RED" "$RESET"
+    printf '%-*s %s✗ failed%s\n' "$width" "${STEP_NAMES[$i]}" "$RED" "$RESET"
   fi
 done
 
