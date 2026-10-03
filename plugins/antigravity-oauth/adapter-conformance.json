@@ -21,7 +21,7 @@
         "reasoning_controls": "supported",
         "reasoning_output": "supported",
         "structured_schemas": "supported",
-        "schema_max_length": "unsupported",
+        "schema_max_length": "not_applicable",
         "stop_reasons": "supported",
         "usage_extraction": "supported",
         "error_classification": "supported",

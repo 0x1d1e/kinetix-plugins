@@ -259,6 +259,21 @@ fn provider_is_strict(provider: &Value) -> bool {
     provider.get("capability_mode").and_then(Value::as_str) == Some("strict")
 }
 
+/// Validation-only JSON Schema keywords Antigravity rejects and whose omission
+/// does not change an argument's shape. Permissive policy drops them
+/// recursively; strict policy rejects them. Keywords outside this list and the
+/// supported set stay fail-closed.
+const ANTIGRAVITY_DROPPABLE_SCHEMA_KEYWORDS: &[&str] = &[
+    "minLength",
+    "maxLength",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "minItems",
+    "maxItems",
+    "format",
+    "multipleOf",
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SchemaPolicy {
     Permissive,
@@ -982,16 +997,21 @@ fn sanitize_schema_node(
                 out.insert(key.clone(), value.clone());
             }
 
-            "$id" | "$anchor" | "type" | "format" | "title" | "description" | "enum"
-            | "minItems" | "maxItems" | "minimum" | "maximum" | "required" | "propertyOrdering" => {
+            "$id" | "$anchor" | "type" | "title" | "description" | "enum" | "minimum"
+            | "maximum" | "required" | "propertyOrdering" => {
                 out.insert(key.clone(), value.clone());
             }
 
-            "maxLength" => {
-                return Err(schema_error(
-                    &format!("{path}.maxLength"),
-                    "unsupported JSON Schema keyword 'maxLength'",
-                ));
+            key if ANTIGRAVITY_DROPPABLE_SCHEMA_KEYWORDS.contains(&key) => {
+                if policy == SchemaPolicy::Strict {
+                    return Err(schema_error(
+                        &format!("{path}.{key}"),
+                        format!("unsupported JSON Schema keyword '{key}'"),
+                    ));
+                }
+                // Permissive: documented compatibility policy. These are
+                // validation-only constraints Antigravity rejects; omitting
+                // them does not change the argument's shape.
             }
 
             other => {
@@ -1031,7 +1051,6 @@ fn sanitize_schema_node(
     }
 
     if let Some(mut variants) = prefix_items {
-        let prefix_len = variants.len() as u64;
         if let Some(items) = out.remove("items") {
             // Positional prefix + homogeneous tail cannot be represented
             // directly. Union both sides as a safe widening.
@@ -1041,16 +1060,12 @@ fn sanitize_schema_node(
             }
         } else if boolean_items == Some(false) {
             // Closed tuple: widen the positional schemas into a homogeneous
-            // union, but keep the tuple closed at the original prefix length.
+            // union.
             if let Some(items) = tuple_variants_to_items(variants) {
                 out.insert("items".into(), items);
             }
-            let max_items = out
-                .get("maxItems")
-                .and_then(Value::as_u64)
-                .map(|current| current.min(prefix_len))
-                .unwrap_or(prefix_len);
-            out.insert("maxItems".into(), json!(max_items));
+            // The closed length (maxItems) is not representable upstream;
+            // it is dropped like any other maxItems under permissive policy.
         }
         // Omitted / true items means an unrestricted tail. Dropping
         // prefixItems is lossy but permissive; synthesizing homogeneous items
@@ -2144,7 +2159,7 @@ mod tests {
                 .map(Vec::len),
             Some(2)
         );
-        assert_eq!(got.pointer("/maxItems"), Some(&json!(2)));
+        assert!(got.pointer("/maxItems").is_none());
         assert!(got.pointer("/prefixItems").is_none());
     }
 
@@ -2181,7 +2196,7 @@ mod tests {
     }
 
     #[test]
-    fn permissive_tool_schema_rejects_max_length_instead_of_dropping_it() {
+    fn permissive_tool_schema_drops_max_length_recursively() {
         let provider = json!({ "capability_mode": "permissive" });
         let request = json!({
             "tools": [{
@@ -2214,11 +2229,95 @@ mod tests {
             }]
         });
 
-        let error = build_tool_declarations(&request, &provider).unwrap_err();
-        assert_eq!(error.code, "bad_request");
-        assert!(error
-            .message
-            .contains("tool 'chrome_devtools_load'.properties.query.maxLength"));
+        let out = Value::Array(build_tool_declarations(&request, &provider).unwrap()).to_string();
+        assert!(!out.contains("maxLength"));
+        assert!(out.contains("Query to execute"));
+        assert!(out.contains("nested"));
+    }
+
+    fn droppable_fixture(keyword: &str) -> Value {
+        let value = match keyword {
+            "minLength" | "maxLength" | "minItems" | "maxItems" => json!(3),
+            "exclusiveMinimum" | "exclusiveMaximum" | "multipleOf" => json!(2),
+            "format" => json!("uri"),
+            other => panic!("unexpected keyword {other}"),
+        };
+        let mut property = json!({ "type": "string" });
+        property
+            .as_object_mut()
+            .unwrap()
+            .insert(keyword.to_string(), value);
+        json!({
+            "type": "object",
+            "properties": {
+                "outer": {
+                    "type": "array",
+                    "items": { "type": "object", "properties": { "value": property } }
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn permissive_drops_known_unsupported_schema_constraints() {
+        for keyword in ANTIGRAVITY_DROPPABLE_SCHEMA_KEYWORDS {
+            let schema = droppable_fixture(keyword);
+            let got =
+                sanitize_schema_with_policy(&schema, "tool 'fixture'", SchemaPolicy::Permissive)
+                    .unwrap();
+            let value = got
+                .pointer("/properties/outer/items/properties/value")
+                .unwrap();
+            assert!(value.get(*keyword).is_none(), "{keyword} not dropped");
+            assert_eq!(value["type"], "string");
+        }
+    }
+
+    #[test]
+    fn strict_rejects_known_unsupported_schema_constraints_with_path() {
+        for keyword in ANTIGRAVITY_DROPPABLE_SCHEMA_KEYWORDS {
+            let schema = droppable_fixture(keyword);
+            let error = sanitize_schema(&schema, "tool 'fixture'").unwrap_err();
+            assert_eq!(error.code, "bad_request");
+            assert!(
+                error.message.contains(&format!(
+                    "tool 'fixture'.properties.outer.items.properties.value.{keyword}"
+                )),
+                "{}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
+    fn permissive_still_rejects_unknown_schema_keywords() {
+        for keyword in ["propertyNames", "contains", "unevaluatedProperties"] {
+            let schema = json!({
+                "type": "object",
+                "properties": { "v": { "type": "string", keyword: { "type": "string" } } }
+            });
+            let error =
+                sanitize_schema_with_policy(&schema, "tool 'fixture'", SchemaPolicy::Permissive)
+                    .unwrap_err();
+            assert!(error.message.contains(keyword));
+        }
+    }
+
+    #[test]
+    fn supported_schema_constraints_are_preserved() {
+        let schema = json!({
+            "type": "object",
+            "description": "d",
+            "properties": {
+                "n": { "type": "number", "minimum": 1, "maximum": 5 },
+                "s": { "type": "string", "pattern": "^a+$", "enum": ["a", "aa"] }
+            },
+            "required": ["n"]
+        });
+        for policy in [SchemaPolicy::Permissive, SchemaPolicy::Strict] {
+            let got = sanitize_schema_with_policy(&schema, "tool 'fixture'", policy).unwrap();
+            assert_eq!(got, schema);
+        }
     }
 
     #[test]
@@ -2262,11 +2361,8 @@ mod tests {
 
     #[test]
     fn tool_schema_rejects_unsupported_keywords() {
-        for (keyword, value) in [
-            ("exclusiveMinimum", json!(0)),
-            ("exclusiveMaximum", json!(10)),
-            ("propertyNames", json!({ "type": "string" })),
-        ] {
+        {
+            let (keyword, value) = ("propertyNames", json!({ "type": "string" }));
             let mut property = json!({ "type": "string" });
             property
                 .as_object_mut()

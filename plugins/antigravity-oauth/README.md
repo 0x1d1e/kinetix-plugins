@@ -18,6 +18,15 @@ provider.credential_plugin = "plugin:dev.kinetix.antigravity-oauth/antigravity-o
 provider.wire_plugin       = "plugin:dev.kinetix.antigravity-oauth/antigravity"
 ```
 
+## Tool schema policy
+
+Tool parameter schemas are sanitized for Antigravity according to the provider's `capability_mode`:
+
+- Supported constraints (`type`, `enum`, `required`, `minimum`, `maximum`, `pattern`, `description`, ...) are preserved.
+- Representable constructs are translated (`$ref` into `$defs`, `oneOf` into `anyOf`, `const` into `enum`, `nullable`, `allOf` merge, permissive tuple widening).
+- Explicitly enumerated unsupported validation constraints (`minLength`, `maxLength`, `exclusiveMinimum`, `exclusiveMaximum`, `minItems`, `maxItems`, `format`, `multipleOf`) are dropped recursively under `permissive` and rejected with the schema path under `strict`.
+- Unknown or unsafe constructs are rejected in both modes.
+
 ## Permissions
 
 The v3 adapter is a pure translator and has no host imports. Before `build-body`, Kinetix provides `_kinetix.project_id` from the selected account credential's non-secret project identity and `_kinetix.now_unix_millis` in `provider-json`; the adapter does not retrieve account state or time from host storage/clock capabilities.
