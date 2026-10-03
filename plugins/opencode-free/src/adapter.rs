@@ -499,10 +499,11 @@ fn build_chat_body(
                         if part.get("type").and_then(Value::as_str) != Some("tool_result") {
                             continue;
                         }
+                        let output = tool_result_output_text(part)?;
                         let mut out = json!({
                             "role": "tool",
                             "tool_call_id": part.get("tool_call_id").and_then(Value::as_str).unwrap_or(""),
-                            "content": part.get("content").and_then(Value::as_str).unwrap_or("")
+                            "content": output
                         });
                         if let Some(name) = part
                             .get("name")
@@ -649,6 +650,7 @@ fn build_anthropic_body(
                         if part.get("type").and_then(Value::as_str) != Some("tool_result") {
                             continue;
                         }
+                        let output = tool_result_output_text(part)?;
                         let mut result = json!({
                             "type":"tool_result",
                             "tool_use_id":required_non_empty_part_str(
@@ -656,7 +658,7 @@ fn build_anthropic_body(
                                 "tool_call_id",
                                 &format!("messages[{message_index}] tool result"),
                             )?,
-                            "content":part.get("content").and_then(Value::as_str).unwrap_or("")
+                            "content":output
                         });
                         if part.get("is_error").and_then(Value::as_bool) == Some(true) {
                             result["is_error"] = json!(true);
@@ -814,7 +816,7 @@ fn build_responses_body(
                             input.push(json!({
                                 "type": "function_call_output",
                                 "call_id": part.get("tool_call_id").and_then(Value::as_str).unwrap_or(""),
-                                "output": part.get("content").and_then(Value::as_str).unwrap_or("")
+                                "output": tool_result_output_text(part)?
                             }));
                         }
                     }
@@ -921,6 +923,74 @@ fn translate_parameters(
             format!("tool schema for '{name}' could not be translated: {error}"),
         )
     })
+}
+
+fn tool_result_output(part: &Value) -> Result<Value, AdapterError> {
+    let content = part.get("content");
+    let structured = part
+        .get("structured_content")
+        .or_else(|| part.get("structuredContent"));
+
+    for value in content.into_iter().chain(structured) {
+        validate_tool_result_media(value)?;
+    }
+
+    Ok(match (content, structured) {
+        (Some(content), Some(structured)) => json!({
+            "content": content,
+            "structured_content": structured
+        }),
+        (Some(content), None) => content.clone(),
+        (None, Some(structured)) => structured.clone(),
+        (None, None) => Value::Null,
+    })
+}
+
+fn tool_result_output_text(part: &Value) -> Result<String, AdapterError> {
+    let output = tool_result_output(part)?;
+    Ok(match output {
+        Value::String(text) => text,
+        Value::Null => String::new(),
+        value => value.to_string(),
+    })
+}
+
+fn validate_tool_result_media(value: &Value) -> Result<(), AdapterError> {
+    const MEDIA_TYPES: &[&str] = &[
+        "image",
+        "image_url",
+        "document",
+        "document_url",
+        "audio",
+        "audio_url",
+        "video",
+        "video_url",
+        "file",
+        "file_url",
+    ];
+
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                validate_tool_result_media(value)?;
+            }
+        }
+        Value::Object(object) => {
+            if let Some(kind) = object.get("type").and_then(Value::as_str) {
+                if MEDIA_TYPES.contains(&kind) {
+                    return Err(err(
+                        "unsupported_media",
+                        format!("OpenCode transport does not support {kind} tool-result media"),
+                    ));
+                }
+            }
+            for value in object.values() {
+                validate_tool_result_media(value)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn validate_tool_result_error_support(

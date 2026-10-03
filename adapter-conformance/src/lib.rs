@@ -604,53 +604,147 @@ fn check_tool_result_payloads(
     context: &str,
     transport: &TransportProfile,
 ) -> Result<(), String> {
-    if transport.format != "antigravity"
-        || transport.capabilities["tool_result_continuation"] != CapabilityStatus::Supported
-    {
+    if transport.capabilities["tool_result_continuation"] != CapabilityStatus::Supported {
         return Ok(());
     }
 
     let mut request = parse_fixture(REQUEST_TOOL_CONTINUATION);
-    request["messages"][1]["parts"][0]["content"] = json!([
-        {"type":"text","text":"result text"},
-        {"type":"json","value":{"exit_code":0}},
-        {"type":"image","mime":"image/png","data":"QUJD"},
-        {"type":"document","mime":"application/pdf","data":"JVBERi0="}
-    ]);
-    let body = adapter
-        .build_body(&request, &transport.provider, &transport.model)
-        .map_err(|error| format!("{context} rejected structured/media tool output: {error}"))?;
-    let function_response = body
-        .pointer("/request/contents/1/parts/0/functionResponse")
-        .ok_or_else(|| format!("{context} omitted the Gemini function response"))?;
-    if function_response["response"]["exit_code"] != 0
-        || function_response["response"]["result"] != "result text"
-        || function_response["parts"][0]["inlineData"]["data"] != "QUJD"
-        || function_response["parts"][0]["inlineData"]["mimeType"] != "image/png"
-        || function_response["parts"][1]["inlineData"]["data"] != "JVBERi0="
-        || function_response["parts"][1]["inlineData"]["mimeType"] != "application/pdf"
-    {
-        return Err(format!(
-            "{context} lost structured or multimodal tool-result parts: {function_response}"
-        ));
+    for value in [
+        json!({"exit_code":0}),
+        json!([1, 2]),
+        json!([{"type":"record","id":1}]),
+        json!([]),
+    ] {
+        request["messages"][1]["parts"][0]["content"] = value.clone();
+        request["messages"][1]["parts"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("structured_content");
+        let body = adapter
+            .build_body(&request, &transport.provider, &transport.model)
+            .map_err(|error| format!("{context} rejected JSON tool output {value}: {error}"))?;
+        let preserved = if transport.format == "antigravity" {
+            let response = body.pointer("/request/contents/1/parts/0/functionResponse/response");
+            if value.is_object() {
+                response == Some(&value)
+            } else {
+                response.and_then(|response| response.get("result")) == Some(&value)
+            }
+        } else {
+            open_code_tool_output(&body, &transport.format)
+                .and_then(|output| serde_json::from_str::<Value>(output).ok())
+                == Some(value.clone())
+        };
+        if !preserved {
+            return Err(format!(
+                "{context} lost JSON tool-result payload {value}: {body}"
+            ));
+        }
     }
 
-    for (kind, part) in [
+    if transport.format == "antigravity" {
+        let mixed_parts = json!([
+            {"type":"record","id":1},
+            {"type":"image","mime":"image/png","data":"QUJD"}
+        ]);
+        request["messages"][1]["parts"][0]["content"] = mixed_parts.clone();
+        let body = adapter
+            .build_body(&request, &transport.provider, &transport.model)
+            .map_err(|error| format!("{context} rejected a mixed JSON array: {error}"))?;
+        if body.pointer("/request/contents/1/parts/0/functionResponse/response/result")
+            != Some(&mixed_parts)
+        {
+            return Err(format!("{context} changed a mixed JSON array: {body}"));
+        }
+    }
+
+    request["messages"][1]["parts"][0]["content"] = json!({"exit_code":0});
+    request["messages"][1]["parts"][0]["structured_content"] =
+        json!({"source":"structured_content"});
+    let body = adapter
+        .build_body(&request, &transport.provider, &transport.model)
+        .map_err(|error| format!("{context} rejected structured_content tool output: {error}"))?;
+    let preserved = if transport.format == "antigravity" {
+        body.pointer("/request/contents/1/parts/0/functionResponse/response/structured_parts")
+            .and_then(Value::as_array)
+            .is_some_and(|parts| {
+                parts.contains(&json!({"exit_code":0}))
+                    && parts.contains(&json!({"source":"structured_content"}))
+            })
+    } else {
+        open_code_tool_output(&body, &transport.format)
+            .and_then(|output| serde_json::from_str::<Value>(output).ok())
+            == Some(json!({
+                "content":{"exit_code":0},
+                "structured_content":{"source":"structured_content"}
+            }))
+    };
+    if !preserved {
+        return Err(format!("{context} lost structured_content: {body}"));
+    }
+
+    let text_parts = json!([{"type":"text","text":"result text"}]);
+    request["messages"][1]["parts"][0]["content"] = text_parts.clone();
+    request["messages"][1]["parts"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("structured_content");
+    let body = adapter
+        .build_body(&request, &transport.provider, &transport.model)
+        .map_err(|error| format!("{context} rejected text-part tool output: {error}"))?;
+    let preserved = if transport.format == "antigravity" {
+        body.pointer("/request/contents/1/parts/0/functionResponse/response/result")
+            == Some(&json!("result text"))
+    } else {
+        open_code_tool_output(&body, &transport.format)
+            .and_then(|output| serde_json::from_str::<Value>(output).ok())
+            == Some(text_parts)
+    };
+    if !preserved {
+        return Err(format!("{context} lost text content parts: {body}"));
+    }
+
+    if transport.format == "antigravity" {
+        request["messages"][1]["parts"][0]["content"] = json!([
+            {"type":"text","text":"result text"},
+            {"type":"json","value":{"exit_code":0}},
+            {"type":"image","mime":"image/png","data":"QUJD"},
+            {"type":"document","mime":"application/pdf","data":"JVBERi0="}
+        ]);
+        let body = adapter
+            .build_body(&request, &transport.provider, &transport.model)
+            .map_err(|error| format!("{context} rejected supported media tool output: {error}"))?;
+        let function_response = body
+            .pointer("/request/contents/1/parts/0/functionResponse")
+            .ok_or_else(|| format!("{context} omitted the Gemini function response"))?;
+        if function_response["response"]["exit_code"] != 0
+            || function_response["response"]["result"] != "result text"
+            || function_response["parts"][0]["inlineData"]["data"] != "QUJD"
+            || function_response["parts"][0]["inlineData"]["mimeType"] != "image/png"
+            || function_response["parts"][1]["inlineData"]["data"] != "JVBERi0="
+            || function_response["parts"][1]["inlineData"]["mimeType"] != "application/pdf"
+        {
+            return Err(format!(
+                "{context} lost structured or multimodal tool-result parts: {function_response}"
+            ));
+        }
+    }
+
+    for (kind, content) in [
         (
             "unsupported media",
-            json!({"type":"audio","mime":"audio/wav","data":"AA=="}),
+            json!([{"type":"audio","mime":"audio/wav","data":"AA=="}]),
         ),
         (
-            "URI media",
-            json!({"type":"document_url","url":"gs://bucket/report.pdf"}),
+            "image media",
+            json!([{"type":"image","mime":"image/png","data":"QUJD"}]),
         ),
-        ("missing MIME", json!({"type":"image","data":"QUJD"})),
         (
-            "invalid MIME",
-            json!({"type":"image","mime":"not-a-mime","data":"QUJD"}),
+            "nested media",
+            json!({"nested":[{"type":"image","mime":"image/png","data":"QUJD"}]}),
         ),
     ] {
-        request["messages"][1]["parts"][0]["content"] = json!([part]);
+        request["messages"][1]["parts"][0]["content"] = content;
         match adapter.build_body(&request, &transport.provider, &transport.model) {
             Err(error) if error.contains("unsupported_media") => {}
             Err(error) => {
@@ -658,14 +752,77 @@ fn check_tool_result_payloads(
                     "{context} returned a non-compatibility error for {kind}: {error}"
                 ))
             }
+            Ok(body) if transport.format == "antigravity" && kind == "image media" => {
+                if body
+                    .pointer("/request/contents/1/parts/0/functionResponse/parts/0/inlineData/data")
+                    != Some(&json!("QUJD"))
+                {
+                    return Err(format!("{context} lost supported image media: {body}"));
+                }
+            }
+            Ok(body) if transport.format == "antigravity" && kind == "nested media" => {
+                // Nested JSON is an opaque structured result for Gemini, not a media part.
+                if body
+                    .pointer("/request/contents/1/parts/0/functionResponse/response/nested/0/type")
+                    != Some(&json!("image"))
+                {
+                    return Err(format!("{context} lost nested structured JSON: {body}"));
+                }
+            }
             Ok(body) => {
                 return Err(format!(
-                    "{context} silently accepted {kind} in a function response: {body}"
+                    "{context} silently accepted unsupported {kind} in a function response: {body}"
                 ))
             }
         }
     }
+
+    if transport.format == "antigravity" {
+        for (kind, content) in [
+            (
+                "URI media",
+                json!([{"type":"document_url","url":"gs://bucket/report.pdf"}]),
+            ),
+            ("missing MIME", json!([{"type":"image","data":"QUJD"}])),
+            (
+                "invalid MIME",
+                json!([{"type":"image","mime":"not-a-mime","data":"QUJD"}]),
+            ),
+        ] {
+            request["messages"][1]["parts"][0]["content"] = content;
+            match adapter.build_body(&request, &transport.provider, &transport.model) {
+                Err(error) if error.contains("unsupported_media") => {}
+                Err(error) => {
+                    return Err(format!(
+                        "{context} returned a non-compatibility error for {kind}: {error}"
+                    ))
+                }
+                Ok(body) => {
+                    return Err(format!(
+                        "{context} silently accepted {kind} in a function response: {body}"
+                    ))
+                }
+            }
+        }
+    }
     Ok(())
+}
+
+fn open_code_tool_output<'a>(body: &'a Value, format: &str) -> Option<&'a str> {
+    match format {
+        "openai-chat" => body.pointer("/messages/1/content").and_then(Value::as_str),
+        "openai-responses" => body
+            .get("input")?
+            .as_array()?
+            .iter()
+            .find(|item| item.get("type").and_then(Value::as_str) == Some("function_call_output"))?
+            .get("output")?
+            .as_str(),
+        "anthropic" => body
+            .pointer("/messages/1/content/0/content")
+            .and_then(Value::as_str),
+        _ => None,
+    }
 }
 
 fn check_tool_result_errors(

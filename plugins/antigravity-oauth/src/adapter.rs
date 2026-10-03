@@ -943,6 +943,30 @@ fn tool_result_media_part(part: &Value, kind: &str) -> Result<Value, AdapterErro
     Ok(json!({ "inlineData": { "mimeType": mime, "data": data } }))
 }
 
+fn is_tool_result_content_parts(parts: &[Value]) -> bool {
+    const PART_TYPES: &[&str] = &[
+        "text",
+        "json",
+        "structured",
+        "structured_json",
+        "image",
+        "image_url",
+        "document",
+        "document_url",
+        "audio",
+        "audio_url",
+        "video",
+        "video_url",
+    ];
+
+    !parts.is_empty()
+        && parts.iter().all(|part| {
+            part.get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| PART_TYPES.contains(&kind))
+        })
+}
+
 fn tool_result_part(p: &Value, name: &str, id: &str) -> Result<Value, AdapterError> {
     let mut media = Vec::new();
     let mut text = Vec::new();
@@ -956,7 +980,7 @@ fn tool_result_part(p: &Value, name: &str, id: &str) -> Result<Value, AdapterErr
     match content {
         Value::String(value) => text.push(value.clone()),
         Value::Object(_) => structured.push(content.clone()),
-        Value::Array(parts) => {
+        Value::Array(parts) if is_tool_result_content_parts(parts) => {
             for part in parts {
                 match part.get("type").and_then(Value::as_str).unwrap_or("") {
                     "text" => {
@@ -982,6 +1006,7 @@ fn tool_result_part(p: &Value, name: &str, id: &str) -> Result<Value, AdapterErr
                 }
             }
         }
+        Value::Array(_) => structured.push(content.clone()),
         Value::Null => {}
         _ => structured.push(content.clone()),
     }
