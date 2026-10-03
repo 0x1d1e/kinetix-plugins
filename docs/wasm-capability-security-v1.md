@@ -1,6 +1,6 @@
 # WASM capability security contract v1
 
-This is the normative host-boundary contract for every plugin language and runtime. Kinetix owns enforcement. This repository owns the WIT surface, package permission vocabulary, and portable adversarial fixtures. A runtime cannot claim conformance merely because the plugin SDK or fixture smoke test passes.
+This is the normative host-boundary contract for every plugin language and runtime. Kinetix owns enforcement. The host repository owns the WIT surface; this repository owns the package permission vocabulary and portable adversarial fixtures. A runtime cannot claim conformance merely because the plugin SDK or fixture smoke test passes.
 
 ## Authority and approval
 

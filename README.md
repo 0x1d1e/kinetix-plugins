@@ -10,7 +10,7 @@ This repository is split out of the Kinetix monorepo so plugin development, test
 .
 ├── plugins/                  # First-party plugin sources
 ├── sdk/                      # Rust guest SDK
-├── wit/                      # Canonical plugin WIT ABI
+├── wit/                      # Mirror of the host plugin contract (WIT, schemas, fixtures)
 ├── catalog.json              # Authoritative marketplace metadata
 ├── trusted-publishers.json   # Publisher trust metadata
 ├── scripts/                  # Build/signing helpers
@@ -100,6 +100,13 @@ A release does **not** automatically make a catalog entry installable. After the
 
 ## Compatibility
 
-The plugin ABI is defined by `wit/kinetix-plugin.wit`. Host-side ABI changes must be coordinated with the Kinetix repository before plugins are released against them. Before adding host imports or another plugin runtime, read the [WASM capability security contract](docs/wasm-capability-security-v1.md) and run its consumer conformance fixtures.
+The plugin contract is owned by `PrightCord/kinetix`: its `wit/` directory holds the canonical WIT worlds, JSON contract schemas, and shared golden fixtures. This repository keeps byte-identical copies in `wit/` and `sdk/wit*/`; only the fixture trees listed in `PLUGIN_OWNED` (`scripts/sync_host_contract.py`) originate here. Change the contract in the host first, then mirror it:
+
+```bash
+scripts/sync_host_contract.py            # copy from $KINETIX_DIR or ../kinetix
+scripts/sync_host_contract.py --check    # CI: fail on drift
+```
+
+Before adding host imports or another plugin runtime, read the [WASM capability security contract](docs/wasm-capability-security-v1.md) and run its consumer conformance fixtures.
 
 See [MIGRATION.md](MIGRATION.md) for the original extraction boundary and source revision.

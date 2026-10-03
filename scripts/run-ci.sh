@@ -9,6 +9,7 @@
 #   6. runtime-check the compiled Antigravity v3 adapter component with host imports trapped
 #   7. validate malicious capability-security packages and smoke-test their imports
 #   8. validate plugins/*/plugin.toml manifests
+#   9. check wit/ and sdk/wit*/ mirror the host contract ($KINETIX_DIR or ../kinetix)
 set -uo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -107,6 +108,7 @@ run_step "Test compiled adapter runtime boundary" scripts/test_adapter_component
 run_step "Test portable security fixtures" scripts/test_security_fixtures.sh || overall=1
 run_step "Validate catalog JSON" validate_json || overall=1
 run_step "Validate plugin metadata and package contract" validate_plugin_metadata || overall=1
+run_step "Check host contract mirror" python3 scripts/sync_host_contract.py --check || overall=1
 
 printf '\n%sSummary%s\n' "$CYAN" "$RESET"
 printf '%-28s %s\n' "Step" "Status"
