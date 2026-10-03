@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use kinetix_plugin_sdk::model_capabilities::{
     ModelCapabilitiesV3, ModelTransportCapability, TransportFormat,
 };
+use kinetix_plugin_sdk::schema::{self, SchemaMode, SchemaProfile};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -431,7 +432,11 @@ fn ensure_required_responses_tools(body: &mut Value) {
     obj.entry("tool_choice").or_insert(json!("auto"));
 }
 
-fn build_chat_body(req: &Value, model: &Value) -> Result<Value, AdapterError> {
+fn build_chat_body(
+    req: &Value,
+    model: &Value,
+    schema_mode: SchemaMode,
+) -> Result<Value, AdapterError> {
     let mut messages = Vec::new();
 
     if let Some(system) = req.get("system").and_then(Value::as_array) {
@@ -535,20 +540,18 @@ fn build_chat_body(req: &Value, model: &Value) -> Result<Value, AdapterError> {
 
     if let Some(tools) = req.get("tools").and_then(Value::as_array) {
         if !tools.is_empty() {
-            body["tools"] = Value::Array(
-                tools.iter()
-                    .map(|tool| {
-                        json!({
-                            "type": "function",
-                            "function": {
-                                "name": tool.get("name").and_then(Value::as_str).unwrap_or("tool"),
-                                "description": tool.get("description").cloned().unwrap_or(Value::Null),
-                                "parameters": tool.get("parameters").cloned().unwrap_or_else(|| json!({"type":"object","properties":{}}))
-                            }
-                        })
-                    })
-                    .collect(),
-            );
+            let mut declarations = Vec::with_capacity(tools.len());
+            for tool in tools {
+                declarations.push(json!({
+                    "type": "function",
+                    "function": {
+                        "name": tool.get("name").and_then(Value::as_str).unwrap_or("tool"),
+                        "description": tool.get("description").cloned().unwrap_or(Value::Null),
+                        "parameters": translate_parameters(tool, SchemaProfile::OpenAI, schema_mode)?
+                    }
+                }));
+            }
+            body["tools"] = Value::Array(declarations);
         }
     }
 
@@ -556,7 +559,11 @@ fn build_chat_body(req: &Value, model: &Value) -> Result<Value, AdapterError> {
     Ok(body)
 }
 
-fn build_anthropic_body(req: &Value, model: &Value) -> Result<Value, AdapterError> {
+fn build_anthropic_body(
+    req: &Value,
+    model: &Value,
+    schema_mode: SchemaMode,
+) -> Result<Value, AdapterError> {
     let mut messages = Vec::new();
     let system = req
         .get("system")
@@ -710,22 +717,18 @@ fn build_anthropic_body(req: &Value, model: &Value) -> Result<Value, AdapterErro
         }
     }
     if let Some(tools) = req.get("tools").and_then(Value::as_array) {
-        body["tools"] = Value::Array(
-            tools
-                .iter()
-                .map(|tool| {
-                    let mut declaration = json!({
-                        "name":tool.get("name").and_then(Value::as_str).unwrap_or("tool"),
-                        "input_schema":tool.get("parameters").cloned()
-                            .unwrap_or_else(|| json!({"type":"object","properties":{}}))
-                    });
-                    if let Some(description) = tool.get("description").and_then(Value::as_str) {
-                        declaration["description"] = json!(description);
-                    }
-                    declaration
-                })
-                .collect(),
-        );
+        let mut declarations = Vec::with_capacity(tools.len());
+        for tool in tools {
+            let mut declaration = json!({
+                "name":tool.get("name").and_then(Value::as_str).unwrap_or("tool"),
+                "input_schema":translate_parameters(tool, SchemaProfile::Anthropic, schema_mode)?
+            });
+            if let Some(description) = tool.get("description").and_then(Value::as_str) {
+                declaration["description"] = json!(description);
+            }
+            declarations.push(declaration);
+        }
+        body["tools"] = Value::Array(declarations);
     }
     ensure_required_anthropic_tools(&mut body);
     Ok(body)
@@ -755,7 +758,11 @@ fn ensure_required_anthropic_tools(body: &mut Value) {
     }
 }
 
-fn build_responses_body(req: &Value, model: &Value) -> Value {
+fn build_responses_body(
+    req: &Value,
+    model: &Value,
+    schema_mode: SchemaMode,
+) -> Result<Value, AdapterError> {
     let mut input = Vec::new();
 
     if let Some(system) = req.get("system").and_then(Value::as_array) {
@@ -835,41 +842,42 @@ fn build_responses_body(req: &Value, model: &Value) -> Value {
     }
 
     if let Some(tools) = req.get("tools").and_then(Value::as_array) {
-        body["tools"] = Value::Array(
-            tools.iter()
-                .map(|tool| {
-                    json!({
-                        "type": "function",
-                        "name": tool.get("name").and_then(Value::as_str).unwrap_or("tool"),
-                        "description": tool.get("description").cloned().unwrap_or(Value::Null),
-                        "parameters": tool.get("parameters").cloned().unwrap_or_else(|| json!({"type":"object","properties":{}}))
-                    })
-                })
-                .collect(),
-        );
+        let mut declarations = Vec::with_capacity(tools.len());
+        for tool in tools {
+            declarations.push(json!({
+                "type": "function",
+                "name": tool.get("name").and_then(Value::as_str).unwrap_or("tool"),
+                "description": tool.get("description").cloned().unwrap_or(Value::Null),
+                "parameters": translate_parameters(tool, SchemaProfile::OpenAIResponses, schema_mode)?
+            }));
+        }
+        body["tools"] = Value::Array(declarations);
     }
 
     ensure_required_responses_tools(&mut body);
-    body
+    Ok(body)
 }
 
 pub fn build_body(
     request_json: &str,
-    _provider_json: &str,
+    provider_json: &str,
     model_json: &str,
 ) -> Result<String, AdapterError> {
     let req: Value = serde_json::from_str(request_json)
         .map_err(|e| err("bad_request", format!("bad request json: {e}")))?;
     validate_tool_history(&req)?;
     validate_supported_request_features(&req)?;
+    let provider: Value = serde_json::from_str(provider_json)
+        .map_err(|e| err("invalid_configuration", format!("bad provider json: {e}")))?;
+    let schema_mode = schema_mode(&provider)?;
     let model: Value = serde_json::from_str(model_json)
         .map_err(|e| err("bad_request", format!("bad model json: {e}")))?;
     let transport = model_transport(&model)?;
     validate_tool_result_error_support(&req, &transport.format)?;
     let body = match transport.format {
-        TransportFormat::OpenAiChat => build_chat_body(&req, &model)?,
-        TransportFormat::OpenAiResponses => build_responses_body(&req, &model),
-        TransportFormat::Anthropic => build_anthropic_body(&req, &model)?,
+        TransportFormat::OpenAiChat => build_chat_body(&req, &model, schema_mode)?,
+        TransportFormat::OpenAiResponses => build_responses_body(&req, &model, schema_mode)?,
+        TransportFormat::Anthropic => build_anthropic_body(&req, &model, schema_mode)?,
         _ => {
             return Err(err(
                 "unsupported_transport",
@@ -879,6 +887,40 @@ pub fn build_body(
     };
 
     Ok(body.to_string())
+}
+
+fn schema_mode(provider: &Value) -> Result<SchemaMode, AdapterError> {
+    let value = match provider.get("capability_mode") {
+        None => "compatible",
+        Some(Value::String(value)) => value,
+        Some(_) => {
+            return Err(err(
+                "invalid_configuration",
+                "capability_mode must be a string",
+            ))
+        }
+    };
+    value
+        .parse()
+        .map_err(|error: schema::SchemaError| err("invalid_configuration", error.to_string()))
+}
+
+fn translate_parameters(
+    tool: &Value,
+    profile: SchemaProfile,
+    mode: SchemaMode,
+) -> Result<Value, AdapterError> {
+    let parameters = tool
+        .get("parameters")
+        .cloned()
+        .unwrap_or_else(|| json!({"type":"object","properties":{}}));
+    schema::translate_tool_parameters(&parameters, profile, mode).map_err(|error| {
+        let name = tool.get("name").and_then(Value::as_str).unwrap_or("tool");
+        err(
+            "invalid_request",
+            format!("tool schema for '{name}' could not be translated: {error}"),
+        )
+    })
 }
 
 fn validate_tool_result_error_support(
@@ -1793,6 +1835,55 @@ mod tests {
             .iter()
             .any(|tool| tool["name"] == "read"));
         assert!(body["tools"][0].get("function").is_none());
+    }
+
+    #[test]
+    fn all_open_code_transports_translate_tool_schemas_with_the_shared_profiles() {
+        let request = json!({
+            "requested_model":"schema-test",
+            "messages":[],
+            "tools":[{"name":"schema_tool","parameters":{
+                "type":"object",
+                "properties":{
+                    "query":{"type":"string","minLength":"2","maxLength":"32","format":"regex"},
+                    "tuple":{"type":"array","prefixItems":[{"type":"integer"}],"items":false}
+                }
+            }}]
+        });
+        let cases = [
+            (chat_model("schema-test"), "/tools/0/function/parameters"),
+            (responses_model("schema-test"), "/tools/0/parameters"),
+            (anthropic_model("schema-test"), "/tools/0/input_schema"),
+        ];
+        for (model, schema_path) in cases {
+            let body: Value =
+                serde_json::from_str(&build_body(&request.to_string(), "{}", &model).unwrap())
+                    .unwrap();
+            let schema = body.pointer(schema_path).unwrap();
+            assert_eq!(schema["properties"]["query"]["minLength"], 2);
+            assert_eq!(schema["properties"]["query"]["maxLength"], 32);
+            assert_eq!(schema["properties"]["query"]["format"], "regex");
+            assert_eq!(
+                schema["properties"]["tuple"]["prefixItems"][0]["type"],
+                "integer"
+            );
+            assert_eq!(schema["properties"]["tuple"]["items"], false);
+        }
+
+        let invalid_request = json!({
+            "tools":[{"name":"invalid","parameters":{
+                "type":"object","properties":{"value":{"x-unknown":true}}
+            }}]
+        });
+        for model in [
+            chat_model("schema-test"),
+            responses_model("schema-test"),
+            anthropic_model("schema-test"),
+        ] {
+            let error = build_body(&invalid_request.to_string(), "{}", &model).unwrap_err();
+            assert_eq!(error.code, "invalid_request");
+            assert!(error.message.contains("unknown JSON Schema keyword"));
+        }
     }
 
     #[test]

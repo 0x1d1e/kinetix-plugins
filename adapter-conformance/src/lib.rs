@@ -157,6 +157,7 @@ pub fn check(adapter: &impl Adapter, profile_json: &str) -> Result<(), String> {
             REQUEST_TOOL_CALL,
             &["read_file", "src/main.rs"],
         )?;
+        check_tool_name_identity(adapter, &context, transport)?;
         check_request_feature(
             adapter,
             &context,
@@ -166,6 +167,7 @@ pub fn check(adapter: &impl Adapter, profile_json: &str) -> Result<(), String> {
             &["get_weather", "read_file", "Paris", "src/main.rs"],
         )?;
         check_tool_result_continuation(adapter, &context, transport)?;
+        check_tool_result_payloads(adapter, &context, transport)?;
         check_tool_result_errors(adapter, &context, transport)?;
         check_request_feature(
             adapter,
@@ -207,7 +209,13 @@ pub fn check(adapter: &impl Adapter, profile_json: &str) -> Result<(), String> {
             "non_streaming",
             false,
         )?;
+        if transport.capabilities["streaming"] == CapabilityStatus::Supported
+            && transport.capabilities["non_streaming"] == CapabilityStatus::Supported
+        {
+            check_stream_full_equivalence(adapter, &context, response_fixture)?;
+        }
         check_stop_reasons(adapter, &context, transport, response_fixture)?;
+        check_provider_response_tolerance(adapter, &context, transport)?;
         check_error_classification(adapter, &context, transport)?;
     }
 
@@ -366,6 +374,160 @@ fn expect_unsupported<T>(
     }
 }
 
+fn check_tool_name_identity(
+    adapter: &impl Adapter,
+    context: &str,
+    transport: &TransportProfile,
+) -> Result<(), String> {
+    if transport.capabilities["tool_calls"] != CapabilityStatus::Supported {
+        return Ok(());
+    }
+
+    let client_name = if transport.format == "antigravity" {
+        "read file!"
+    } else {
+        "read_file"
+    };
+    let mut request = parse_fixture(REQUEST_TOOL_CALL);
+    request["tools"][0]["name"] = json!(client_name);
+    request["messages"][1]["parts"][0]["name"] = json!(client_name);
+    request["messages"].as_array_mut().unwrap().push(json!({
+        "role": "tool",
+        "parts": [{
+            "type": "tool_result",
+            "tool_call_id": "call_read",
+            "name": client_name,
+            "content": "tool output",
+            "is_error": false
+        }]
+    }));
+    request["tool_choice"] = json!({"mode":"specific","name":client_name});
+
+    let body = adapter
+        .build_body(&request, &transport.provider, &transport.model)
+        .map_err(|error| format!("{context} rejected a reversible tool-name probe: {error}"))?;
+    let wire_name = match transport.format.as_str() {
+        "antigravity" => body
+            .pointer("/request/tools/0/functionDeclarations/0/name")
+            .and_then(Value::as_str),
+        "openai-chat" => body
+            .pointer("/tools/0/function/name")
+            .and_then(Value::as_str),
+        "openai-responses" => body.pointer("/tools/0/name").and_then(Value::as_str),
+        "anthropic" => body.pointer("/tools/0/name").and_then(Value::as_str),
+        format => {
+            return Err(format!(
+                "{context} has no tool-name assertion for '{format}'"
+            ));
+        }
+    }
+    .ok_or_else(|| format!("{context} omitted the declared tool name"))?;
+    if transport.format != "antigravity" && wire_name != client_name {
+        return Err(format!(
+            "{context} changed tool name '{client_name}' to '{wire_name}'"
+        ));
+    }
+
+    let historical_name = match transport.format.as_str() {
+        "antigravity" => body
+            .pointer("/request/contents/1/parts/0/functionCall/name")
+            .and_then(Value::as_str),
+        "openai-chat" => body
+            .pointer("/messages/1/tool_calls/0/function/name")
+            .and_then(Value::as_str),
+        "openai-responses" => body
+            .get("input")
+            .and_then(Value::as_array)
+            .and_then(|items| items.iter().find(|item| item["type"] == "function_call"))
+            .and_then(|item| item["name"].as_str()),
+        "anthropic" => body
+            .pointer("/messages/1/content/0/name")
+            .and_then(Value::as_str),
+        _ => None,
+    }
+    .ok_or_else(|| format!("{context} omitted the historical tool call"))?;
+    if historical_name != wire_name {
+        return Err(format!(
+            "{context} used inconsistent declaration and history names: {wire_name} vs {historical_name}"
+        ));
+    }
+
+    if transport.format == "antigravity"
+        && (body.pointer("/request/toolConfig/functionCallingConfig/allowedFunctionNames/0")
+            != Some(&json!(wire_name))
+            || body.pointer("/request/contents/2/parts/0/functionResponse/name")
+                != Some(&json!(wire_name)))
+    {
+        return Err(format!(
+            "{context} used inconsistent tool choice or result name for '{client_name}'"
+        ));
+    }
+
+    let stream = match transport.format.as_str() {
+        "antigravity" => json!({"response":{"candidates":[{"content":{"parts":[{
+            "functionCall":{"name":wire_name,"args":{}}
+        }]}}]}}),
+        "openai-chat" => json!({"choices":[{"delta":{"tool_calls":[{
+            "index":0,"function":{"name":wire_name,"arguments":"{}"}
+        }]}}]}),
+        "openai-responses" => json!({"type":"response.output_item.added","output_index":0,"item":{
+            "type":"function_call","call_id":"call_probe","name":wire_name
+        }}),
+        "anthropic" => json!({"type":"content_block_start","index":0,"content_block":{
+            "type":"tool_use","id":"call_probe","name":wire_name,"input":{}
+        }}),
+        _ => unreachable!(),
+    };
+    let response = adapter
+        .parse_stream_chunk(&stream)
+        .map_err(|error| format!("{context} failed to parse its tool-name probe: {error}"))?;
+    let events = unpack_response_envelope(response, context)?;
+    let parsed_name = events
+        .iter()
+        .find(|event| event["type"] == "tool_call_start")
+        .and_then(|event| event["name"].as_str())
+        .ok_or_else(|| format!("{context} omitted the parsed tool call"))?;
+    if parsed_name != client_name {
+        return Err(format!(
+            "{context} did not restore client tool name '{client_name}': {parsed_name}"
+        ));
+    }
+
+    if transport.capabilities["non_streaming"] != CapabilityStatus::Supported {
+        return Ok(());
+    }
+    let full = match transport.format.as_str() {
+        "antigravity" => json!({"response":{"candidates":[{"content":{"parts":[{
+            "functionCall":{"name":wire_name,"args":{}}
+        }]}}]}}),
+        "openai-chat" => json!({"object":"chat.completion","choices":[{"message":{"tool_calls":[{
+            "index":0,"id":"call_probe","type":"function","function":{"name":wire_name,"arguments":"{}"}
+        }]}}]}),
+        "openai-responses" => json!({"object":"response","output":[{
+            "type":"function_call","call_id":"call_probe","name":wire_name,"arguments":"{}"
+        }]}),
+        "anthropic" => json!({"type":"message","content":[{
+            "type":"tool_use","id":"call_probe","name":wire_name,"input":{}
+        }]}),
+        _ => unreachable!(),
+    };
+    let response = adapter
+        .parse_full_response(&full)
+        .map_err(|error| format!("{context} failed to parse its full tool-name probe: {error}"))?;
+    let events = unpack_response_envelope(response, context)?;
+    let parsed_name = events
+        .iter()
+        .find(|event| event["type"] == "tool_call_start")
+        .and_then(|event| event["name"].as_str())
+        .ok_or_else(|| format!("{context} omitted its full-response tool call"))?;
+    if parsed_name != client_name {
+        return Err(format!(
+            "{context} did not restore full-response tool name '{client_name}': {parsed_name}"
+        ));
+    }
+    Ok(())
+}
+
 fn check_tool_result_continuation(
     adapter: &impl Adapter,
     context: &str,
@@ -434,6 +596,55 @@ fn check_tool_result_continuation(
             adapter.build_body(&request, &transport.provider, &transport.model),
         ),
         CapabilityStatus::NotApplicable => Ok(()),
+    }
+}
+
+fn check_tool_result_payloads(
+    adapter: &impl Adapter,
+    context: &str,
+    transport: &TransportProfile,
+) -> Result<(), String> {
+    if transport.format != "antigravity"
+        || transport.capabilities["tool_result_continuation"] != CapabilityStatus::Supported
+    {
+        return Ok(());
+    }
+
+    let mut request = parse_fixture(REQUEST_TOOL_CONTINUATION);
+    request["messages"][1]["parts"][0]["content"] = json!([
+        {"type":"text","text":"result text"},
+        {"type":"json","value":{"exit_code":0}},
+        {"type":"image","mime":"image/png","data":"QUJD"},
+        {"type":"document_url","mime":"application/pdf","url":"gs://bucket/report.pdf"}
+    ]);
+    let body = adapter
+        .build_body(&request, &transport.provider, &transport.model)
+        .map_err(|error| format!("{context} rejected structured/media tool output: {error}"))?;
+    let function_response = body
+        .pointer("/request/contents/1/parts/0/functionResponse")
+        .ok_or_else(|| format!("{context} omitted the Gemini function response"))?;
+    if function_response["response"]["exit_code"] != 0
+        || function_response["response"]["result"] != "result text"
+        || function_response["parts"][0]["inlineData"]["data"] != "QUJD"
+        || function_response["parts"][1]["fileData"]["fileUri"] != "gs://bucket/report.pdf"
+        || function_response["parts"][1]["fileData"]["mimeType"] != "application/pdf"
+    {
+        return Err(format!(
+            "{context} lost structured or multimodal tool-result parts: {function_response}"
+        ));
+    }
+
+    request["messages"][1]["parts"][0]["content"] = json!([
+        {"type":"audio","mime":"audio/wav","data":"AA=="}
+    ]);
+    match adapter.build_body(&request, &transport.provider, &transport.model) {
+        Err(error) if error.contains("unsupported_media") => Ok(()),
+        Err(error) => Err(format!(
+            "{context} returned a non-compatibility error for unsupported media: {error}"
+        )),
+        Ok(body) => Err(format!(
+            "{context} silently accepted unsupported tool-result media: {body}"
+        )),
     }
 }
 
@@ -881,6 +1092,125 @@ fn assert_expected_events(
     Ok(())
 }
 
+fn check_stream_full_equivalence(
+    adapter: &impl Adapter,
+    context: &str,
+    fixture: &Value,
+) -> Result<(), String> {
+    let streaming = parse_response(adapter, context, fixture, true)?;
+    let non_streaming = parse_response(adapter, context, fixture, false)?;
+    let streaming = normalize_response_semantics(&streaming)?;
+    let non_streaming = normalize_response_semantics(&non_streaming)?;
+    if streaming != non_streaming {
+        return Err(format!(
+            "{context} streaming and full-response semantics differ: stream={streaming}, full={non_streaming}"
+        ));
+    }
+    Ok(())
+}
+
+fn normalize_response_semantics(events: &Value) -> Result<Value, String> {
+    let events = events
+        .as_array()
+        .ok_or_else(|| "response events must be an array".to_string())?;
+    let mut request_id = Value::Null;
+    let mut text = String::new();
+    let mut thinking = String::new();
+    let mut signatures = BTreeSet::new();
+    let mut calls: BTreeMap<u64, Value> = BTreeMap::new();
+    let mut finish = Value::Null;
+    let mut usage = json!({
+        "input": null,
+        "output": null,
+        "cached": null,
+        "cache_write": null,
+        "thinking": null
+    });
+
+    for event in events {
+        match event["type"].as_str().unwrap_or_default() {
+            "start" => request_id = event["upstream_request_id"].clone(),
+            "text_delta" => {
+                if let Some(value) = event["text"].as_str() {
+                    text.push_str(value);
+                }
+            }
+            "thinking_delta" => {
+                if let Some(value) = event["text"].as_str() {
+                    thinking.push_str(value);
+                }
+                if let Some(signature) = event["signature"].as_str() {
+                    signatures.insert(signature.to_string());
+                }
+            }
+            "tool_call_start" => {
+                let index = event["index"]
+                    .as_u64()
+                    .ok_or_else(|| "tool call start requires an index".to_string())?;
+                let call = json!({
+                    "id": event.get("id").cloned().unwrap_or(Value::Null),
+                    "name": event.get("name").cloned().unwrap_or(Value::Null),
+                    "signature": event.get("signature").cloned().unwrap_or(Value::Null),
+                    "arguments": String::new()
+                });
+                if let Some(signature) = event["signature"].as_str() {
+                    signatures.insert(signature.to_string());
+                }
+                if calls.insert(index, call.clone()).is_some() {
+                    return Err(format!("duplicate tool call index {index}"));
+                }
+            }
+            "tool_call_args_delta" => {
+                let index = event["index"]
+                    .as_u64()
+                    .ok_or_else(|| "tool argument delta requires an index".to_string())?;
+                let call = calls
+                    .get_mut(&index)
+                    .ok_or_else(|| format!("tool arguments arrived before call start {index}"))?;
+                if let Some(value) = event["args"].as_str() {
+                    call["arguments"] = json!(format!(
+                        "{}{}",
+                        call["arguments"].as_str().unwrap_or(""),
+                        value
+                    ));
+                }
+            }
+            "finish" => finish = event.get("reason").cloned().unwrap_or(Value::Null),
+            "usage" => {
+                for field in ["input", "output", "cached", "cache_write", "thinking"] {
+                    if !event[field].is_null() {
+                        usage[field] = event[field].clone();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut normalized_calls = Vec::with_capacity(calls.len());
+    for (_, mut call) in calls {
+        let raw = call["arguments"].as_str().unwrap_or_default();
+        let arguments = if raw.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_str(raw)
+                .map_err(|error| format!("invalid normalized tool arguments: {error}"))?
+        };
+        call["arguments"] = arguments;
+        normalized_calls.push(call);
+    }
+
+    Ok(json!({
+        "request_id": request_id,
+        "text": text,
+        "thinking": thinking,
+        "signatures": signatures,
+        "calls": normalized_calls,
+        "finish": finish,
+        "usage": usage
+    }))
+}
+
 fn check_stop_reasons(
     adapter: &impl Adapter,
     context: &str,
@@ -933,6 +1263,124 @@ fn assert_finish_reason(context: &str, expected: &str, events: &Value) -> Result
             "{context} failed to preserve finish reason '{expected}'"
         ))
     }
+}
+
+fn check_provider_response_tolerance(
+    adapter: &impl Adapter,
+    context: &str,
+    transport: &TransportProfile,
+) -> Result<(), String> {
+    if transport.format != "antigravity" {
+        return Ok(());
+    }
+
+    let chunk = json!({
+        "response": {
+            "candidates": [{
+                "content": {"parts": [
+                    {"text":"", "unknownPartField":true},
+                    {
+                        "thought":true,
+                        "text":"thinking with call",
+                        "thoughtSignature":"sig-call",
+                        "functionCall":{"name":"read_file","args":r#"{"path":"src/main.rs"}"#,"unknownCallField":true},
+                        "unknownPartField":true
+                    },
+                    {"functionCall":{"name":"get_weather","args":{"city":"Paris"}}}
+                ]},
+                "finishReason":"FUNCTION_CALL",
+                "unknownCandidateField":true
+            }],
+            "unknownResponseField":true
+        }
+    });
+    let response = adapter.parse_stream_chunk(&chunk).map_err(|error| {
+        format!("{context} rejected safe provider response variations: {error}")
+    })?;
+    let events = unpack_response_envelope(response, context)?;
+    let thinking = events
+        .iter()
+        .find(|event| event["type"] == "thinking_delta")
+        .ok_or_else(|| format!("{context} lost thinking combined with a function call"))?;
+    if thinking["text"] != "thinking with call" {
+        return Err(format!(
+            "{context} changed mixed thinking content: {thinking}"
+        ));
+    }
+    let calls: Vec<_> = events
+        .iter()
+        .filter(|event| event["type"] == "tool_call_start")
+        .collect();
+    if calls.len() != 2
+        || calls[0]["name"] != "read_file"
+        || !calls[0]["id"].is_null()
+        || calls[0]["signature"] != "sig-call"
+        || calls[1]["name"] != "get_weather"
+    {
+        return Err(format!(
+            "{context} did not normalize multiple optional-ID calls: {calls:?}"
+        ));
+    }
+    let first_arguments: Value = serde_json::from_str(
+        events
+            .iter()
+            .find(|event| event["type"] == "tool_call_args_delta" && event["index"] == 0)
+            .and_then(|event| event["args"].as_str())
+            .unwrap_or_default(),
+    )
+    .map_err(|error| format!("{context} emitted invalid string arguments: {error}"))?;
+    let second_arguments: Value = serde_json::from_str(
+        events
+            .iter()
+            .find(|event| event["type"] == "tool_call_args_delta" && event["index"] == 1)
+            .and_then(|event| event["args"].as_str())
+            .unwrap_or_default(),
+    )
+    .map_err(|error| format!("{context} emitted invalid object arguments: {error}"))?;
+    if first_arguments != json!({"path":"src/main.rs"})
+        || second_arguments != json!({"city":"Paris"})
+        || !events
+            .iter()
+            .any(|event| event["type"] == "finish" && event["reason"] == "tool_calls")
+    {
+        return Err(format!(
+            "{context} changed normalized tool arguments or finish reason"
+        ));
+    }
+
+    // Gemini may send usage in a terminal chunk without candidates or an ID.
+    let terminal = json!({"response":{"usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":3},"unknown":true}});
+    let terminal = adapter
+        .parse_stream_chunk(&terminal)
+        .map_err(|error| format!("{context} rejected a usage-only terminal frame: {error}"))?;
+    let terminal = unpack_response_envelope(terminal, context)?;
+    if !terminal
+        .iter()
+        .any(|event| event["type"] == "usage" && event["input"] == 7 && event["output"] == 3)
+    {
+        return Err(format!("{context} lost usage from a terminal-only frame"));
+    }
+
+    for (reason, expected) in [
+        ("STOP_SEQUENCE", "stop"),
+        ("LENGTH", "length"),
+        ("CONTENT_FILTER", "content_filter"),
+        ("TOOL_CALLS", "tool_calls"),
+    ] {
+        let chunk =
+            json!({"response":{"candidates":[{"content":{"parts":[]},"finishReason":reason}]}});
+        let output = adapter
+            .parse_stream_chunk(&chunk)
+            .map_err(|error| format!("{context} rejected finish alias {reason}: {error}"))?;
+        let events = unpack_response_envelope(output, context)?;
+        if !events
+            .iter()
+            .any(|event| event["type"] == "finish" && event["reason"] == expected)
+        {
+            return Err(format!("{context} did not normalize finish alias {reason}"));
+        }
+    }
+    Ok(())
 }
 
 fn check_error_classification(
