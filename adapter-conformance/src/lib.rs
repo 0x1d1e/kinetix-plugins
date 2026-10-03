@@ -615,7 +615,7 @@ fn check_tool_result_payloads(
         {"type":"text","text":"result text"},
         {"type":"json","value":{"exit_code":0}},
         {"type":"image","mime":"image/png","data":"QUJD"},
-        {"type":"document_url","mime":"application/pdf","url":"gs://bucket/report.pdf"}
+        {"type":"document","mime":"application/pdf","data":"JVBERi0="}
     ]);
     let body = adapter
         .build_body(&request, &transport.provider, &transport.model)
@@ -626,26 +626,46 @@ fn check_tool_result_payloads(
     if function_response["response"]["exit_code"] != 0
         || function_response["response"]["result"] != "result text"
         || function_response["parts"][0]["inlineData"]["data"] != "QUJD"
-        || function_response["parts"][1]["fileData"]["fileUri"] != "gs://bucket/report.pdf"
-        || function_response["parts"][1]["fileData"]["mimeType"] != "application/pdf"
+        || function_response["parts"][0]["inlineData"]["mimeType"] != "image/png"
+        || function_response["parts"][1]["inlineData"]["data"] != "JVBERi0="
+        || function_response["parts"][1]["inlineData"]["mimeType"] != "application/pdf"
     {
         return Err(format!(
             "{context} lost structured or multimodal tool-result parts: {function_response}"
         ));
     }
 
-    request["messages"][1]["parts"][0]["content"] = json!([
-        {"type":"audio","mime":"audio/wav","data":"AA=="}
-    ]);
-    match adapter.build_body(&request, &transport.provider, &transport.model) {
-        Err(error) if error.contains("unsupported_media") => Ok(()),
-        Err(error) => Err(format!(
-            "{context} returned a non-compatibility error for unsupported media: {error}"
-        )),
-        Ok(body) => Err(format!(
-            "{context} silently accepted unsupported tool-result media: {body}"
-        )),
+    for (kind, part) in [
+        (
+            "unsupported media",
+            json!({"type":"audio","mime":"audio/wav","data":"AA=="}),
+        ),
+        (
+            "URI media",
+            json!({"type":"document_url","url":"gs://bucket/report.pdf"}),
+        ),
+        ("missing MIME", json!({"type":"image","data":"QUJD"})),
+        (
+            "invalid MIME",
+            json!({"type":"image","mime":"not-a-mime","data":"QUJD"}),
+        ),
+    ] {
+        request["messages"][1]["parts"][0]["content"] = json!([part]);
+        match adapter.build_body(&request, &transport.provider, &transport.model) {
+            Err(error) if error.contains("unsupported_media") => {}
+            Err(error) => {
+                return Err(format!(
+                    "{context} returned a non-compatibility error for {kind}: {error}"
+                ))
+            }
+            Ok(body) => {
+                return Err(format!(
+                    "{context} silently accepted {kind} in a function response: {body}"
+                ))
+            }
+        }
     }
+    Ok(())
 }
 
 fn check_tool_result_errors(
@@ -1359,6 +1379,41 @@ fn check_provider_response_tolerance(
         .any(|event| event["type"] == "usage" && event["input"] == 7 && event["output"] == 3)
     {
         return Err(format!("{context} lost usage from a terminal-only frame"));
+    }
+
+    let call_frame = json!({"response":{"candidates":[{"content":{"parts":[{
+        "functionCall":{"name":"read_file","args":{"path":"src/main.rs"}}
+    }]}}]}});
+    let call_events = adapter
+        .parse_stream_chunk(&call_frame)
+        .map_err(|error| format!("{context} rejected a split function-call frame: {error}"))?;
+    let call_events = unpack_response_envelope(call_events, context)?;
+    if !call_events
+        .iter()
+        .any(|event| event["type"] == "tool_call_start" && event["name"] == "read_file")
+    {
+        return Err(format!(
+            "{context} lost the function call before its terminal frame"
+        ));
+    }
+    let finish_frame = json!({"response":{
+        "candidates":[{"content":{"parts":[]},"finishReason":"STOP"}],
+        "usageMetadata":{"promptTokenCount":9,"candidatesTokenCount":4}
+    }});
+    let finish_events = adapter
+        .parse_stream_chunk(&finish_frame)
+        .map_err(|error| format!("{context} rejected a split terminal frame: {error}"))?;
+    let finish_events = unpack_response_envelope(finish_events, context)?;
+    if !finish_events
+        .iter()
+        .any(|event| event["type"] == "finish" && event["reason"] == "stop")
+        || !finish_events
+            .iter()
+            .any(|event| event["type"] == "usage" && event["input"] == 9 && event["output"] == 4)
+    {
+        return Err(format!(
+            "{context} lost separate finish or terminal usage events: {finish_events:?}"
+        ));
     }
 
     for (reason, expected) in [

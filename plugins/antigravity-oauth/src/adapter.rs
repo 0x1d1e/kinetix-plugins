@@ -893,6 +893,56 @@ fn unsupported_media(kind: &str, reason: &str) -> AdapterError {
     )
 }
 
+fn valid_mime_type(value: &str) -> bool {
+    let Some((media_type, subtype)) = value.split_once('/') else {
+        return false;
+    };
+    let is_token = |token: &str| {
+        !token.is_empty()
+            && token
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
+    };
+    !subtype.contains('/') && is_token(media_type) && is_token(subtype)
+}
+
+fn tool_result_media_part(part: &Value, kind: &str) -> Result<Value, AdapterError> {
+    let source = part.get("source").unwrap_or(&Value::Null);
+    let source_type = source.get("type").and_then(Value::as_str);
+    if kind.ends_with("_url")
+        || part.get("url").is_some()
+        || part.get("uri").is_some()
+        || source_type == Some("url")
+        || source.get("url").is_some()
+    {
+        return Err(unsupported_media(
+            kind,
+            "URI media is not supported in Gemini function responses",
+        ));
+    }
+
+    if source.is_object() && source_type != Some("base64") {
+        return Err(unsupported_media(
+            kind,
+            "only base64-backed sources are supported in Gemini function responses",
+        ));
+    }
+
+    let mime = part
+        .get("mime")
+        .or_else(|| source.get("media_type"))
+        .and_then(Value::as_str)
+        .filter(|mime| valid_mime_type(mime))
+        .ok_or_else(|| unsupported_media(kind, "missing or invalid MIME type"))?;
+    let data = part
+        .get("data")
+        .or_else(|| source.get("data"))
+        .and_then(Value::as_str)
+        .filter(|data| !data.is_empty())
+        .ok_or_else(|| unsupported_media(kind, "missing inline data"))?;
+    Ok(json!({ "inlineData": { "mimeType": mime, "data": data } }))
+}
+
 fn tool_result_part(p: &Value, name: &str, id: &str) -> Result<Value, AdapterError> {
     let mut media = Vec::new();
     let mut text = Vec::new();
@@ -926,7 +976,7 @@ fn tool_result_part(p: &Value, name: &str, id: &str) -> Result<Value, AdapterErr
                         );
                     }
                     kind @ ("image" | "image_url" | "document" | "document_url") => {
-                        media.push(media_part(part, kind)?);
+                        media.push(tool_result_media_part(part, kind)?);
                     }
                     _ => return Err(unsupported_media("unknown", "unrecognized content part")),
                 }
@@ -2486,27 +2536,10 @@ mod tests {
 
     #[test]
     fn antigravity_thinking_tool_result_next_message_continuation() {
-        let request = json!({
-            "schema": "kinetix.plugin.request",
-            "schema_version": 1,
-            "messages": [
-                {"role": "assistant", "parts": [
-                    {"type": "thinking", "text": "checking", "signature": "opaque-signature"},
-                    {"type": "tool_call", "id": "call_bash", "name": "bash tool", "arguments": r#"{"command":"pwd"}"#, "signature": "opaque-signature"}
-                ]},
-                {"role": "tool", "parts": [{
-                    "type": "tool_result", "tool_call_id": "call_bash",
-                    "content": [
-                        {"type": "text", "text": "done"},
-                        {"type": "json", "value": {"exit_code": 0}},
-                        {"type": "image", "mime": "image/png", "data": "QUJD"}
-                    ]
-                }]},
-                {"role": "user", "parts": [{"type": "text", "text": "next message"}]}
-            ],
-            "tools": [{"name": "bash tool", "parameters": {"type": "object", "properties": {}}}],
-            "tool_choice": {"mode": "specific", "name": "bash tool"}
-        });
+        let request: Value = serde_json::from_str(include_str!(
+            "../../../wit/fixtures/plugin-request/v1/antigravity-tool-result-multimodal.json"
+        ))
+        .unwrap();
         let body: Value = serde_json::from_str(
             &build_body_at(
                 &request.to_string(),
@@ -2520,9 +2553,10 @@ mod tests {
         .unwrap();
         let wire_name = body["request"]["tools"][0]["functionDeclarations"][0]["name"].clone();
         assert_eq!(
-            body["request"]["toolConfig"]["functionCallingConfig"]["allowedFunctionNames"][0],
-            wire_name
+            body["request"]["toolConfig"]["functionCallingConfig"]["mode"],
+            "VALIDATED"
         );
+        assert_eq!(wire_name, "bash");
         let contents = body["request"]["contents"].as_array().unwrap();
         assert_eq!(contents.len(), 3);
         assert_eq!(contents[0]["parts"][0]["thought"], true);
@@ -2531,10 +2565,7 @@ mod tests {
             "opaque-signature"
         );
         assert_eq!(contents[0]["parts"][1]["functionCall"]["name"], wire_name);
-        assert_eq!(
-            contents[0]["parts"][1]["thoughtSignature"],
-            "opaque-signature"
-        );
+        assert!(contents[0]["parts"][1].get("thoughtSignature").is_none());
         assert_eq!(
             contents[1]["parts"][0]["functionResponse"]["name"],
             wire_name
@@ -2565,7 +2596,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        assert_eq!(events[0]["name"], "bash tool");
+        assert_eq!(events[0]["name"], "bash");
         assert_eq!(events[1]["args"], "{\"command\":\"pwd\"}");
     }
 
