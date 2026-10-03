@@ -1029,6 +1029,7 @@ fn tool_result_part(p: &Value, name: &str, id: &str) -> Result<Value, AdapterErr
         1 => structured.pop(),
         _ => Some(json!({"structured_parts": structured})),
     };
+    let has_structured = structured.is_some();
     let is_error = p.get("is_error").and_then(Value::as_bool) == Some(true);
     let response = if is_error {
         match structured {
@@ -1062,7 +1063,7 @@ fn tool_result_part(p: &Value, name: &str, id: &str) -> Result<Value, AdapterErr
             };
             object.insert(key, json!(text.join("")));
         }
-        if object.is_empty() {
+        if object.is_empty() && !has_structured {
             object.insert("result".into(), json!(""));
         }
         Value::Object(object)

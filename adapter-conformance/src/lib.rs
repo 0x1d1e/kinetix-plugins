@@ -668,6 +668,45 @@ fn check_tool_result_payloads(
         ));
     }
 
+    for (label, content, structured_content, expected) in [
+        ("empty content object", Some(json!({})), None, json!({})),
+        ("empty structured_content", None, Some(json!({})), json!({})),
+        (
+            "empty JSON content part",
+            Some(json!([{"type":"json","value":{}}])),
+            None,
+            json!([{"type":"json","value":{}}]),
+        ),
+    ] {
+        let mut empty_request = parse_fixture(REQUEST_TOOL_CONTINUATION);
+        let part = empty_request["messages"][1]["parts"][0]
+            .as_object_mut()
+            .unwrap();
+        part.remove("content");
+        part.remove("structured_content");
+        if let Some(content) = content {
+            part.insert("content".into(), content);
+        }
+        if let Some(structured_content) = structured_content {
+            part.insert("structured_content".into(), structured_content);
+        }
+
+        let body = adapter
+            .build_body(&empty_request, &transport.provider, &transport.model)
+            .map_err(|error| format!("{context} rejected {label}: {error}"))?;
+        let preserved = if transport.format == "antigravity" {
+            body.pointer("/request/contents/1/parts/0/functionResponse/response")
+                == Some(&json!({}))
+        } else {
+            open_code_tool_output(&body, &transport.format)
+                .and_then(|output| serde_json::from_str::<Value>(output).ok())
+                == Some(expected)
+        };
+        if !preserved {
+            return Err(format!("{context} changed {label}: {body}"));
+        }
+    }
+
     let mixed_parts = json!([
         {"type":"record","id":1},
         {"type":"image","mime":"image/png","data":"QUJD"}
