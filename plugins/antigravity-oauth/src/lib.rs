@@ -1413,6 +1413,26 @@ fn normalized_model_capabilities(
                 .map(SupportCapability::new);
     }
 
+    if let Some(supported) = info
+        .get("supportsThinking")
+        .and_then(serde_json::Value::as_bool)
+    {
+        capabilities.reasoning = Some(if supported {
+            capabilities
+                .reasoning
+                .filter(|reasoning| reasoning.supported)
+                .unwrap_or_else(ReasoningCapability::supported_unknown)
+        } else {
+            ReasoningCapability::unsupported()
+        });
+    }
+    if let Some(supported) = info
+        .get("supportsImages")
+        .and_then(serde_json::Value::as_bool)
+    {
+        capabilities.vision = Some(VisionCapability::new(supported));
+    }
+
     if capabilities.is_empty() {
         return Ok(None);
     }
@@ -1445,14 +1465,16 @@ fn normalize_model(
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
         .or_else(|| Some(id.clone()));
-    let context_window = info
-        .get("contextWindow")
-        .or_else(|| info.get("inputTokenLimit"))
-        .and_then(|value| value.as_u64());
-    let max_output_tokens = info
-        .get("maxOutputTokens")
-        .or_else(|| info.get("outputTokenLimit"))
-        .and_then(|value| value.as_u64());
+    let positive_limit = |fields: &[&str]| {
+        fields.iter().find_map(|field| {
+            info.get(*field)
+                .and_then(serde_json::Value::as_u64)
+                .filter(|value| *value > 0 && *value <= i64::MAX as u64)
+        })
+    };
+    // The advertised maxTokens field has no verified context-window semantics.
+    let context_window = positive_limit(&["contextWindow", "inputTokenLimit"]);
+    let max_output_tokens = positive_limit(&["maxOutputTokens", "outputTokenLimit"]);
     let capabilities_json = normalized_model_capabilities(&id, info)?;
     let raw_metadata = serde_json::to_string(info).ok();
 
@@ -2978,6 +3000,104 @@ mod tests {
         assert_eq!(models[1].display_name.as_deref(), Some("Gemini 2.5 Pro"));
         assert_eq!(models[1].context_window, Some(2097152));
         assert_eq!(models[1].max_output_tokens, Some(65536));
+    }
+
+    #[test]
+    fn discovery_preserves_observed_antigravity_images_without_guessing_context() {
+        // Fields captured from fetchAvailableModels, excluding account and experiment data.
+        for (id, advertised_tokens, output) in [
+            ("claude-opus-4-6-thinking", 250000, 64000),
+            ("gemini-3.8-flash-tiered", 1048576, 65536),
+        ] {
+            let info = serde_json::json!({
+                "maxTokens": advertised_tokens,
+                "maxOutputTokens": output,
+                "supportsImages": true,
+                "supportsThinking": true
+            });
+            let model = normalize_model(id.into(), &info).unwrap().unwrap();
+            assert_eq!(model.context_window, None);
+            assert_eq!(model.max_output_tokens, Some(output));
+            let capabilities =
+                ModelCapabilitiesV2::from_json(model.capabilities_json.as_deref().unwrap())
+                    .unwrap();
+            assert_eq!(capabilities.vision, Some(VisionCapability::new(true)));
+            assert!(capabilities.tools.is_none());
+            assert!(capabilities.structured_output.is_none());
+        }
+    }
+
+    #[test]
+    fn discovery_preserves_explicit_limit_priority_and_image_denials() {
+        let model = normalize_model(
+            "future-model".into(),
+            &serde_json::json!({
+                "contextWindow": 100000,
+                "inputTokenLimit": 200000,
+                "maxTokens": 250000,
+                "maxOutputTokens": 10000,
+                "outputTokenLimit": 20000,
+                "supportsImages": false,
+                "capabilities": {"vision": true}
+            }),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(model.context_window, Some(100000));
+        assert_eq!(model.max_output_tokens, Some(10000));
+        let capabilities =
+            ModelCapabilitiesV2::from_json(model.capabilities_json.as_deref().unwrap()).unwrap();
+        assert_eq!(capabilities.vision, Some(VisionCapability::new(false)));
+    }
+
+    #[test]
+    fn discovery_does_not_invent_limits_or_vision_from_invalid_fields() {
+        for info in [
+            serde_json::json!({}),
+            serde_json::json!({"maxTokens": 250000}),
+            serde_json::json!({"contextWindow": 0, "inputTokenLimit": -1}),
+            serde_json::json!({"contextWindow": u64::MAX, "inputTokenLimit": "100000"}),
+            serde_json::json!({"maxTokens": 0, "maxOutputTokens": 0, "supportsImages": "true"}),
+            serde_json::json!({"maxTokens": -1, "maxOutputTokens": -1, "supportsImages": 1}),
+            serde_json::json!({"maxTokens": u64::MAX, "maxOutputTokens": u64::MAX}),
+        ] {
+            let model = normalize_model("future-model".into(), &info)
+                .unwrap()
+                .unwrap();
+            assert_eq!(model.context_window, None);
+            assert_eq!(model.max_output_tokens, None);
+            assert_eq!(model.capabilities_json, None);
+        }
+    }
+
+    #[test]
+    fn discovery_preserves_thinking_flags_without_inventing_controls() {
+        let model = normalize_model(
+            "future-model".into(),
+            &serde_json::json!({"supportsThinking": true}),
+        )
+        .unwrap()
+        .unwrap();
+        let capabilities =
+            ModelCapabilitiesV2::from_json(model.capabilities_json.as_deref().unwrap()).unwrap();
+        let reasoning = capabilities.reasoning.unwrap();
+        assert!(reasoning.supported);
+        assert!(reasoning.mode.is_none());
+        assert!(reasoning.levels.is_none());
+        assert!(reasoning.can_disable.is_none());
+
+        let model = normalize_model(
+            "claude-opus-4-6-thinking".into(),
+            &serde_json::json!({"supportsThinking": false}),
+        )
+        .unwrap()
+        .unwrap();
+        let capabilities =
+            ModelCapabilitiesV2::from_json(model.capabilities_json.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            capabilities.reasoning,
+            Some(ReasoningCapability::unsupported())
+        );
     }
 
     #[test]

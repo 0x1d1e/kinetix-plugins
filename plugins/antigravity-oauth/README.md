@@ -18,6 +18,12 @@ provider.credential_plugin = "plugin:dev.kinetix.antigravity-oauth/antigravity-o
 provider.wire_plugin       = "plugin:dev.kinetix.antigravity-oauth/antigravity"
 ```
 
+## Model metadata
+
+Discovery preserves explicit image/thinking flags and recognized context/output limits. The ambiguous upstream `maxTokens` field remains raw metadata, not a verified context limit. Canonical catalog metadata fills missing capabilities and limits without overriding explicit upstream values. Missing token rates remain unknown; Google or Anthropic API rates do not describe Antigravity subscription billing.
+
+After upgrading, refresh model discovery and review/accept observed changes for existing imports. Pricing sync alone does not update model limits or capabilities.
+
 ## Tool schema policy
 
 The shared [SDK schema engine](../../sdk/README.md#tool-schema-compatibility) translates tool parameters using the Antigravity profile. The default is `compatible`: supported constraints survive, while documented lossy repairs allow tools such as `jev_evaluate` and `chrome_devtools_load` to reach upstream. `strict` permits only lossless translation and otherwise rejects with the tool name and schema path.
