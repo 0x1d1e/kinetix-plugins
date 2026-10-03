@@ -969,6 +969,45 @@ fn validate_tool_result_media(value: &Value) -> Result<(), AdapterError> {
         "file_url",
     ];
 
+    fn is_content_part(part: &Value) -> bool {
+        let Some(object) = part.as_object() else {
+            return false;
+        };
+        let Some(kind) = object.get("type").and_then(Value::as_str) else {
+            return false;
+        };
+        let has_any = |keys: &[&str]| keys.iter().any(|key| object.contains_key(*key));
+        let has_string = |keys: &[&str]| {
+            keys.iter()
+                .any(|key| object.get(*key).is_some_and(Value::is_string))
+        };
+        let source_has_string = |keys: &[&str]| {
+            object
+                .get("source")
+                .and_then(Value::as_object)
+                .is_some_and(|source| {
+                    keys.iter()
+                        .any(|key| source.get(*key).is_some_and(Value::is_string))
+                })
+        };
+
+        match kind {
+            "text" => object.get("text").is_some_and(Value::is_string),
+            "json" | "structured" | "structured_json" => has_any(&["json", "value", "data"]),
+            "image_url" | "document_url" | "audio_url" | "video_url" | "file_url" => {
+                has_string(&["url", "uri"]) || source_has_string(&["url", "uri"])
+            }
+            "image" | "document" | "audio" | "video" | "file" => {
+                has_string(&["data", "url", "uri"]) || source_has_string(&["data", "url", "uri"])
+            }
+            _ => false,
+        }
+    }
+
+    fn is_content_parts(parts: &[Value]) -> bool {
+        !parts.is_empty() && parts.iter().all(is_content_part)
+    }
+
     fn validate_part(part: &Value, media_types: &[&str]) -> Result<(), AdapterError> {
         let Some(object) = part.as_object() else {
             return Ok(());
@@ -1006,11 +1045,12 @@ fn validate_tool_result_media(value: &Value) -> Result<(), AdapterError> {
     }
 
     match value {
-        Value::Array(parts) => {
+        Value::Array(parts) if is_content_parts(parts) => {
             for part in parts {
                 validate_part(part, MEDIA_TYPES)?;
             }
         }
+        Value::Array(_) => {}
         part => validate_part(part, MEDIA_TYPES)?,
     }
     Ok(())

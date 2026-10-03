@@ -647,20 +647,24 @@ fn check_tool_result_payloads(
         }
     }
 
-    if transport.format == "antigravity" {
-        let mixed_parts = json!([
-            {"type":"record","id":1},
-            {"type":"image","mime":"image/png","data":"QUJD"}
-        ]);
-        request["messages"][1]["parts"][0]["content"] = mixed_parts.clone();
-        let body = adapter
-            .build_body(&request, &transport.provider, &transport.model)
-            .map_err(|error| format!("{context} rejected a mixed JSON array: {error}"))?;
-        if body.pointer("/request/contents/1/parts/0/functionResponse/response/result")
-            != Some(&mixed_parts)
-        {
-            return Err(format!("{context} changed a mixed JSON array: {body}"));
-        }
+    let mixed_parts = json!([
+        {"type":"record","id":1},
+        {"type":"image","mime":"image/png","data":"QUJD"}
+    ]);
+    request["messages"][1]["parts"][0]["content"] = mixed_parts.clone();
+    let body = adapter
+        .build_body(&request, &transport.provider, &transport.model)
+        .map_err(|error| format!("{context} rejected a mixed JSON array: {error}"))?;
+    let preserved = if transport.format == "antigravity" {
+        body.pointer("/request/contents/1/parts/0/functionResponse/response/result")
+            == Some(&mixed_parts)
+    } else {
+        open_code_tool_output(&body, &transport.format)
+            .and_then(|output| serde_json::from_str::<Value>(output).ok())
+            == Some(mixed_parts)
+    };
+    if !preserved {
+        return Err(format!("{context} changed a mixed JSON array: {body}"));
     }
 
     request["messages"][1]["parts"][0]["content"] = json!({"exit_code":0});
