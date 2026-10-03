@@ -37,14 +37,14 @@ Protocol translation belongs to plugins. Core retains the canonical client schem
 
 ```rust,ignore
 use kinetix_plugin_sdk::schema::{self, SchemaMode, SchemaProfile};
-let parameters = schema::translate(&parameters, SchemaProfile::Antigravity, SchemaMode::Compatible)?;
+let parameters = schema::translate_tool_parameters(&parameters, SchemaProfile::Antigravity, SchemaMode::Compatible)?;
 ```
 
 `Strict` preserves or translates losslessly, otherwise rejects. `Compatible` allows the profile's lossy transformations. `permissive` parses as a backwards-compatible alias. This policy is independent of an upstream `strict: true` tool flag.
 
 Antigravity's `v1internal` profile inlines acyclic root-local references, converts `const` to `enum`, normalizes nullable schemas and safely merges `allOf`. Conflicting intersections, scoped references and recursive references are rejected rather than overwritten. Compatible mode widens `oneOf` to `anyOf` and positional tuples to homogeneous items, strips unsupported validation features (including string/object/array bounds and `patternProperties`), cleans invalid required entries, and repairs typed empty objects with an optional `_placeholder` boolean property. Stripping `patternProperties` also removes its `additionalProperties` fallback so formerly matching dynamic keys are not newly forbidden. Such repairs can weaken validation or change available argument shapes; clients must still validate tool arguments against their original schema. Strict mode rejects overlapping exclusive unions, tuple approximation and placeholder repairs.
 
-Missing array items become `{}`, preserving unrestricted elements. An unconstrained value schema `{}` remains unconstrained; it is not a typed empty object. Names under `properties` and values inside `enum`, defaults and examples are data, never schema keywords. Both modes reject unknown keywords and invalid keyword values. Reference expansion and traversal are bounded.
+Missing array items become `{}`, preserving unrestricted elements. `translate_tool_parameters` enforces a root argument object, including no-argument schemas `{}`; explicit non-object roots are rejected. Nested unconstrained value schemas `{}` remain unrestricted. Use `translate` when translating a general value schema rather than function parameters. Names under `properties` and values inside `enum`, defaults and examples are data, never schema keywords. Both modes reject unknown keywords and invalid keyword values. Reference expansion and traversal are bounded.
 
 `Gemini` targets Google's JSON Schema `parametersJsonSchema`, not its legacy OpenAPI `parameters` field. `OpenAI`, `Anthropic` and `OpenAICompatible` target ordinary, non-strict JSON Schema tool inputs. These profiles currently preserve known JSON Schema validation features and recursive local references; they do not inherit Antigravity's degradation. They are not certifications of every model's accepted subset. Constrained-decoding modes and endpoint-specific restrictions need separately verified profiles, not guessed stripping rules. Only Antigravity is wired into a plugin in this release; host-native adapters are unchanged.
 

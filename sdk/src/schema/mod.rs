@@ -39,8 +39,31 @@ pub fn translate(
     profile: SchemaProfile,
     mode: SchemaMode,
 ) -> Result<Value, SchemaError> {
+    translate_with_context(schema, profile, mode, false)
+}
+
+/// Translate function parameters, whose root must describe an argument object.
+/// Unlike `translate`, an untyped root is treated as an object. Nested schemas
+/// retain their original value domains. Explicit non-object roots are rejected.
+pub fn translate_tool_parameters(
+    schema: &Value,
+    profile: SchemaProfile,
+    mode: SchemaMode,
+) -> Result<Value, SchemaError> {
+    translate_with_context(schema, profile, mode, true)
+}
+
+fn translate_with_context(
+    schema: &Value,
+    profile: SchemaProfile,
+    mode: SchemaMode,
+    tool_parameters: bool,
+) -> Result<Value, SchemaError> {
     let mut schema = normalize::normalize(schema, profile, mode)?;
     transform::translate(&mut schema, profile, mode)?;
+    if tool_parameters {
+        repair::tool_root(&mut schema, mode)?;
+    }
     repair::repair(&mut schema, profile, mode)?;
     validate::validate(&schema, profile)?;
     Ok(schema)

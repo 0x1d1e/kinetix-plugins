@@ -1,6 +1,31 @@
 use super::{error, walk, SchemaError, SchemaMode, SchemaProfile};
 use serde_json::{json, Value};
 
+pub(super) fn tool_root(schema: &mut Value, mode: SchemaMode) -> Result<(), SchemaError> {
+    if schema == &json!(true) {
+        *schema = json!({});
+    }
+    let map = schema
+        .as_object_mut()
+        .ok_or_else(|| error("$", "tool parameters must describe an object"))?;
+    match map.get("type") {
+        None => {}
+        Some(Value::String(kind)) if kind == "object" => return Ok(()),
+        Some(Value::Array(kinds))
+            if !kinds.is_empty() && kinds.iter().all(|kind| kind == "object") => {}
+        Some(Value::Array(kinds))
+            if mode == SchemaMode::Compatible && kinds.iter().any(|kind| kind == "object") => {}
+        _ => {
+            return Err(error(
+                "$.type",
+                "tool parameters must have root type object",
+            ))
+        }
+    }
+    map.insert("type".into(), json!("object"));
+    Ok(())
+}
+
 pub(super) fn repair(
     schema: &mut Value,
     profile: SchemaProfile,

@@ -550,7 +550,7 @@ fn build_tool_declarations(req: &Value, provider: &Value) -> Result<Vec<Value>, 
             declarations.push(json!({
                 "name": name,
                 "description": tool.get("description").cloned().unwrap_or(Value::Null),
-                "parametersJsonSchema": schema::translate(&parameters, SchemaProfile::Antigravity, mode)
+                "parametersJsonSchema": schema::translate_tool_parameters(&parameters, SchemaProfile::Antigravity, mode)
                     .map_err(|error| tool_schema_error(error, tool.get("name").and_then(Value::as_str).unwrap_or("")))?,
             }));
         }

@@ -1,5 +1,5 @@
 use kinetix_plugin_sdk::schema::{
-    translate,
+    translate, translate_tool_parameters,
     SchemaMode::{Compatible, Strict},
     SchemaProfile::{self, Anthropic, Antigravity, Gemini, OpenAI, OpenAICompatible},
 };
@@ -7,6 +7,62 @@ use serde_json::{json, Value};
 
 fn ag(schema: &Value) -> Value {
     translate(schema, Antigravity, Compatible).unwrap()
+}
+
+#[test]
+fn tool_parameter_root_is_an_object_without_narrowing_nested_values() {
+    for schema in [
+        json!({}),
+        json!(true),
+        json!({"description": "No arguments"}),
+        json!({"$schema": "https://json-schema.org/draft/2020-12/schema"}),
+    ] {
+        let original = schema.clone();
+        let parameters = translate_tool_parameters(&schema, Antigravity, Compatible).unwrap();
+        assert_eq!(parameters["type"], "object");
+        assert_eq!(parameters["properties"]["_placeholder"]["type"], "boolean");
+        assert!(parameters["required"].is_null());
+        assert_eq!(schema, original);
+        assert_eq!(
+            translate_tool_parameters(&parameters, Antigravity, Compatible).unwrap(),
+            parameters
+        );
+        assert!(translate_tool_parameters(&schema, Antigravity, Strict).is_err());
+    }
+    assert_eq!(
+        ag(&json!({})),
+        json!({}),
+        "generic value schemas remain unrestricted"
+    );
+    for profile in [Antigravity, Gemini, OpenAI, Anthropic, OpenAICompatible] {
+        let parameters = translate_tool_parameters(
+            &json!({"properties": {"state": {}, "options": {"additionalProperties": {}}}}),
+            profile,
+            Compatible,
+        )
+        .unwrap();
+        assert_eq!(parameters["type"], "object");
+        assert_eq!(parameters["properties"]["state"], json!({}));
+        assert_eq!(
+            parameters["properties"]["options"],
+            json!({"additionalProperties": {}})
+        );
+        for schema in [
+            json!(false),
+            json!({"type": "string"}),
+            json!({"type": "array", "items": {"type": "string"}}),
+        ] {
+            for mode in [Strict, Compatible] {
+                assert!(translate_tool_parameters(&schema, profile, mode).is_err());
+            }
+        }
+    }
+    let nullable = json!({"type": ["object", "null"], "properties": {"x": {"type": "string"}}});
+    assert_eq!(
+        translate_tool_parameters(&nullable, Antigravity, Compatible).unwrap()["type"],
+        "object"
+    );
+    assert!(translate_tool_parameters(&nullable, Antigravity, Strict).is_err());
 }
 
 // Independent assertion: do not ask the production profile which fields it

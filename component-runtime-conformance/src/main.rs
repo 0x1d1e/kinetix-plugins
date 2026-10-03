@@ -117,6 +117,44 @@ fn main() -> Result<()> {
             case["name"]
         );
     }
+    // No-argument tools occur alongside ordinary tools in real agent requests.
+    // Antigravity's Claude backend requires input_schema.type on every tool.
+    for upstream_id in ["claude-opus-4-6-thinking", "gemini-3-flash"] {
+        let mut tools: Vec<_> = (0..13)
+            .map(|index| {
+                serde_json::json!({
+                    "name": format!("tool_{index}"),
+                    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}}
+                })
+            })
+            .collect();
+        tools.push(serde_json::json!({"name": "merro_list_projects", "parameters": {}}));
+        let request = serde_json::json!({
+            "schema": "kinetix.plugin.request", "schema_version": 1,
+            "messages": [{"role": "user", "parts": [{"type": "text", "text": "hi"}]}],
+            "tools": tools
+        });
+        let params = [
+            Val::String(request.to_string()),
+            Val::String(serde_json::json!({"_kinetix": {"project_id": TEST_PROJECT_ID, "now_unix_millis": TEST_NOW_UNIX_MILLIS}}).to_string()),
+            Val::String(serde_json::json!({"upstream_id": upstream_id}).to_string()),
+            Val::Option(None),
+        ];
+        build_body
+            .call(&mut store, &params, &mut results)
+            .map_err(|error| anyhow!("{upstream_id}: no-argument tool request trapped: {error}"))?;
+        let body = match &results[0] {
+            Val::Result(Ok(Some(value))) => match value.as_ref() {
+                Val::String(body) => serde_json::from_str::<serde_json::Value>(body)?,
+                other => bail!("{upstream_id}: unexpected body {other:?}"),
+            },
+            other => bail!("{upstream_id}: no-argument tool request rejected: {other:?}"),
+        };
+        let schema = body
+            .pointer("/request/tools/0/functionDeclarations/13/parametersJsonSchema")
+            .context("no-argument tool declaration missing")?;
+        ensure!(schema["type"] == "object", "{upstream_id}: tools.13.custom.input_schema.type: Field required; emitted schema: {schema}");
+    }
     println!("v3 build-body and schema corpus completed with every host import trapping");
     Ok(())
 }
