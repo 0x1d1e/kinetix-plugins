@@ -879,17 +879,19 @@ mod tests {
 
     #[test]
     fn v3_transport_preferences_and_alternatives_round_trip() {
-        let mut capabilities = ModelCapabilitiesV3::default();
-        capabilities.transport = Some(ModelTransportCapability {
-            format: TransportFormat::OpenAiResponses,
-            endpoint: Some("/zen/v1/responses".into()),
-            alternatives: vec![TransportOption::at_endpoint(
-                TransportFormat::OpenAiChat,
-                "/zen/v1/chat/completions",
-            )],
-        });
-        capabilities.tools = Some(SupportCapability::new(true));
-        capabilities.parallel_tools = Some(SupportCapability::new(true));
+        let capabilities = ModelCapabilitiesV3 {
+            transport: Some(ModelTransportCapability {
+                format: TransportFormat::OpenAiResponses,
+                endpoint: Some("/zen/v1/responses".into()),
+                alternatives: vec![TransportOption::at_endpoint(
+                    TransportFormat::OpenAiChat,
+                    "/zen/v1/chat/completions",
+                )],
+            }),
+            tools: Some(SupportCapability::new(true)),
+            parallel_tools: Some(SupportCapability::new(true)),
+            ..Default::default()
+        };
 
         let encoded = capabilities.to_json().unwrap();
         let decoded = ModelCapabilitiesV3::from_json(&encoded).unwrap();
@@ -908,11 +910,13 @@ mod tests {
             "/a#fragment",
             "/a\\\\b",
         ] {
-            let mut capabilities = ModelCapabilitiesV3::default();
-            capabilities.transport = Some(ModelTransportCapability::at_endpoint(
-                TransportFormat::OpenAiChat,
-                endpoint,
-            ));
+            let capabilities = ModelCapabilitiesV3 {
+                transport: Some(ModelTransportCapability::at_endpoint(
+                    TransportFormat::OpenAiChat,
+                    endpoint,
+                )),
+                ..Default::default()
+            };
             assert!(capabilities.to_json().is_err(), "{endpoint}");
         }
 
@@ -928,8 +932,10 @@ mod tests {
 
     #[test]
     fn v3_parallel_tools_requires_tools() {
-        let mut capabilities = ModelCapabilitiesV3::default();
-        capabilities.parallel_tools = Some(SupportCapability::new(true));
+        let mut capabilities = ModelCapabilitiesV3 {
+            parallel_tools: Some(SupportCapability::new(true)),
+            ..Default::default()
+        };
         assert!(capabilities.to_json().is_err());
 
         capabilities.tools = Some(SupportCapability::new(false));

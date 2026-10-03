@@ -309,14 +309,14 @@ fn check_request_feature(
                     }
                 }
             }
-            if capability == "reasoning_controls" && transport.format == "antigravity" {
-                if body.pointer("/request/generationConfig/thinkingConfig/thinkingLevel")
+            if capability == "reasoning_controls"
+                && transport.format == "antigravity"
+                && body.pointer("/request/generationConfig/thinkingConfig/thinkingLevel")
                     != Some(&json!("high"))
-                {
-                    return Err(format!(
-                        "{context} did not map high reasoning effort to Gemini thinkingLevel"
-                    ));
-                }
+            {
+                return Err(format!(
+                    "{context} did not map high reasoning effort to Gemini thinkingLevel"
+                ));
             }
             Ok(())
         }
@@ -774,7 +774,7 @@ fn assert_expected_events(
         let value = expected[field].as_str().unwrap();
         let content_event = events
             .iter()
-            .find(|event| event_type(&event, event_kind) && event["text"].as_str() == Some(value));
+            .find(|event| event_type(event, event_kind) && event["text"].as_str() == Some(value));
         let Some(content_event) = content_event else {
             return Err(format!(
                 "{context} response lost {feature} content '{value}'"
@@ -807,7 +807,7 @@ fn assert_expected_events(
             let index = call["index"].as_u64().unwrap();
             let name = call["name"].as_str().unwrap();
             let start = events.iter().find(|event| {
-                event_type(&event, "tool_call_start")
+                event_type(event, "tool_call_start")
                     && event["index"].as_u64() == Some(index)
                     && event["name"].as_str() == Some(name)
             });
@@ -833,7 +833,7 @@ fn assert_expected_events(
             let args = call["arguments"].as_object().unwrap();
             let mut actual_args = String::new();
             for event in events.iter().filter(|event| {
-                event_type(&event, "tool_call_args_delta") && event["index"].as_u64() == Some(index)
+                event_type(event, "tool_call_args_delta") && event["index"].as_u64() == Some(index)
             }) {
                 if let Some(value) = event["args"].as_str() {
                     actual_args.push_str(value);

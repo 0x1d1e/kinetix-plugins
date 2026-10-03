@@ -1569,8 +1569,10 @@ mod tests {
     }
 
     fn test_model(id: &str, format: TransportFormat, endpoint: &str) -> String {
-        let mut capabilities = ModelCapabilitiesV3::default();
-        capabilities.transport = Some(ModelTransportCapability::at_endpoint(format, endpoint));
+        let capabilities = ModelCapabilitiesV3 {
+            transport: Some(ModelTransportCapability::at_endpoint(format, endpoint)),
+            ..Default::default()
+        };
         json!({
             "upstream_id":id,
             "capabilities_json":capabilities.to_json().unwrap()
@@ -1591,8 +1593,10 @@ mod tests {
     }
 
     fn production_model_row(id: &str, format: TransportFormat, endpoint: &str) -> String {
-        let mut capabilities = ModelCapabilitiesV3::default();
-        capabilities.transport = Some(ModelTransportCapability::at_endpoint(format, endpoint));
+        let capabilities = ModelCapabilitiesV3 {
+            transport: Some(ModelTransportCapability::at_endpoint(format, endpoint)),
+            ..Default::default()
+        };
         json!({
             "id":"model_123",
             "provider_id":"provider_123",

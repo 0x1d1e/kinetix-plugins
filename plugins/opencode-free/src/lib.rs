@@ -173,8 +173,10 @@ fn is_free_model(id: &str) -> bool {
 }
 
 fn normalized_capabilities(entry: Option<&CatalogEntry>) -> Result<String, PluginError> {
-    let mut capabilities = ModelCapabilitiesV3::default();
-    capabilities.transport = entry.and_then(|entry| entry.transport.clone());
+    let mut capabilities = ModelCapabilitiesV3 {
+        transport: entry.and_then(|entry| entry.transport.clone()),
+        ..Default::default()
+    };
     capabilities.prices = Some(serde_json::json!({
         "input_per_1m": 0.0,
         "output_per_1m": 0.0,

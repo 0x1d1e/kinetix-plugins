@@ -238,9 +238,11 @@ mod tests {
 
     #[test]
     fn explicit_model_false_narrows_integration_support() {
-        let mut model = ModelCapabilitiesV1::default();
-        model.tools = Some(SupportCapability::new(true));
-        model.vision = Some(VisionCapability::new(false));
+        let model = ModelCapabilitiesV1 {
+            tools: Some(SupportCapability::new(true)),
+            vision: Some(VisionCapability::new(false)),
+            ..Default::default()
+        };
 
         assert_eq!(
             model_support(Some(true), &model, ModelFeature::Tools),
@@ -262,9 +264,11 @@ mod tests {
 
     #[test]
     fn v3_parallel_tools_support_is_narrowed_per_model() {
-        let mut model = ModelCapabilitiesV3::default();
-        model.tools = Some(SupportCapability::new(true));
-        model.parallel_tools = Some(SupportCapability::new(false));
+        let model = ModelCapabilitiesV3 {
+            tools: Some(SupportCapability::new(true)),
+            parallel_tools: Some(SupportCapability::new(false)),
+            ..Default::default()
+        };
 
         assert_eq!(
             model_support_v3(Some(true), &model, ModelFeatureV3::Tools),
