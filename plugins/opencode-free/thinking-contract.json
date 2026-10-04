@@ -1,0 +1,355 @@
+{
+  "schema_version": 1,
+  "kind": "adapter",
+  "plugin": "dev.kinetix.opencode-free",
+  "translation": false,
+  "provider": {},
+  "models": {
+    "openai-chat": {
+      "upstream_id": "mimo-v2.6-flash-free",
+      "capabilities_json": "{\"schema_version\":3,\"transport\":{\"format\":\"openai-chat\",\"endpoint\":\"/zen/v1/chat/completions\"}}"
+    },
+    "openai-responses": {
+      "upstream_id": "muse-spark-1.3-contributor-free",
+      "capabilities_json": "{\"schema_version\":3,\"transport\":{\"format\":\"openai-responses\",\"endpoint\":\"/zen/v1/responses\"}}"
+    },
+    "anthropic": {
+      "upstream_id": "union-alpha",
+      "capabilities_json": "{\"schema_version\":3,\"transport\":{\"format\":\"anthropic\",\"endpoint\":\"/zen/v1/messages\"}}"
+    }
+  },
+  "cases": [
+    {
+      "name": "openai-chat/absent",
+      "model": "openai-chat",
+      "level": null,
+      "expect": {
+        "body": {
+          "model": "mimo-v2.6-flash-free",
+          "messages": [
+            {
+              "role": "system",
+              "content": "conformance system"
+            },
+            {
+              "role": "user",
+              "content": "conformance text"
+            }
+          ],
+          "stream": true,
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "bash",
+                "description": "This tool is unavailable and must not be used.",
+                "parameters": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            },
+            {
+              "type": "function",
+              "function": {
+                "name": "read",
+                "description": "This tool is unavailable and must not be used.",
+                "parameters": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "openai-chat/off",
+      "model": "openai-chat",
+      "level": "off",
+      "expect": {
+        "rejected": "OpenCode adapter does not support canonical reasoning controls"
+      }
+    },
+    {
+      "name": "openai-chat/default",
+      "model": "openai-chat",
+      "level": "default",
+      "expect": {
+        "rejected": "OpenCode adapter does not support canonical reasoning controls"
+      }
+    },
+    {
+      "name": "openai-chat/minimal",
+      "model": "openai-chat",
+      "level": "minimal",
+      "expect": {
+        "rejected": "OpenCode adapter does not support canonical reasoning controls"
+      }
+    },
+    {
+      "name": "openai-chat/low",
+      "model": "openai-chat",
+      "level": "low",
+      "expect": {
+        "rejected": "OpenCode adapter does not support canonical reasoning controls"
+      }
+    },
+    {
+      "name": "openai-chat/medium",
+      "model": "openai-chat",
+      "level": "medium",
+      "expect": {
+        "rejected": "OpenCode adapter does not support canonical reasoning controls"
+      }
+    },
+    {
+      "name": "openai-chat/high",
+      "model": "openai-chat",
+      "level": "high",
+      "expect": {
+        "rejected": "OpenCode adapter does not support canonical reasoning controls"
+      }
+    },
+    {
+      "name": "openai-chat/xhigh",
+      "model": "openai-chat",
+      "level": "xhigh",
+      "expect": {
+        "rejected": "OpenCode adapter does not support canonical reasoning controls"
+      }
+    },
+    {
+      "name": "openai-chat/max",
+      "model": "openai-chat",
+      "level": "max",
+      "expect": {
+        "rejected": "OpenCode adapter does not support canonical reasoning controls"
+      }
+    },
+    {
+      "name": "openai-responses/absent",
+      "model": "openai-responses",
+      "level": null,
+      "expect": {
+        "body": {
+          "model": "muse-spark-1.3-contributor-free",
+          "input": [
+            {
+              "role": "system",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "conformance system"
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "conformance text"
+                }
+              ]
+            }
+          ],
+          "stream": true,
+          "store": false,
+          "tools": [
+            {
+              "type": "function",
+              "name": "bash",
+              "description": "This tool is unavailable and must not be used.",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            },
+            {
+              "type": "function",
+              "name": "read",
+              "description": "This tool is unavailable and must not be used.",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          ],
+          "tool_choice": "auto"
+        }
+      }
+    },
+    {
+      "name": "openai-responses/off",
+      "model": "openai-responses",
+      "level": "off",
+      "expect": {
+        "rejected": "OpenCode adapter does not support canonical reasoning controls"
+      }
+    },
+    {
+      "name": "openai-responses/default",
+      "model": "openai-responses",
+      "level": "default",
+      "expect": {
+        "rejected": "OpenCode adapter does not support canonical reasoning controls"
+      }
+    },
+    {
+      "name": "openai-responses/minimal",
+      "model": "openai-responses",
+      "level": "minimal",
+      "expect": {
+        "rejected": "OpenCode adapter does not support canonical reasoning controls"
+      }
+    },
+    {
+      "name": "openai-responses/low",
+      "model": "openai-responses",
+      "level": "low",
+      "expect": {
+        "rejected": "OpenCode adapter does not support canonical reasoning controls"
+      }
+    },
+    {
+      "name": "openai-responses/medium",
+      "model": "openai-responses",
+      "level": "medium",
+      "expect": {
+        "rejected": "OpenCode adapter does not support canonical reasoning controls"
+      }
+    },
+    {
+      "name": "openai-responses/high",
+      "model": "openai-responses",
+      "level": "high",
+      "expect": {
+        "rejected": "OpenCode adapter does not support canonical reasoning controls"
+      }
+    },
+    {
+      "name": "openai-responses/xhigh",
+      "model": "openai-responses",
+      "level": "xhigh",
+      "expect": {
+        "rejected": "OpenCode adapter does not support canonical reasoning controls"
+      }
+    },
+    {
+      "name": "openai-responses/max",
+      "model": "openai-responses",
+      "level": "max",
+      "expect": {
+        "rejected": "OpenCode adapter does not support canonical reasoning controls"
+      }
+    },
+    {
+      "name": "anthropic/absent",
+      "model": "anthropic",
+      "level": null,
+      "expect": {
+        "body": {
+          "model": "union-alpha",
+          "messages": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "conformance text"
+                }
+              ]
+            }
+          ],
+          "max_tokens": 4096,
+          "stream": true,
+          "system": "conformance system",
+          "tools": [
+            {
+              "name": "bash",
+              "description": "This tool is unavailable and must not be used.",
+              "input_schema": {
+                "type": "object",
+                "properties": {}
+              }
+            },
+            {
+              "name": "read",
+              "description": "This tool is unavailable and must not be used.",
+              "input_schema": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "anthropic/off",
+      "model": "anthropic",
+      "level": "off",
+      "expect": {
+        "rejected": "OpenCode adapter does not support canonical reasoning controls"
+      }
+    },
+    {
+      "name": "anthropic/default",
+      "model": "anthropic",
+      "level": "default",
+      "expect": {
+        "rejected": "OpenCode adapter does not support canonical reasoning controls"
+      }
+    },
+    {
+      "name": "anthropic/minimal",
+      "model": "anthropic",
+      "level": "minimal",
+      "expect": {
+        "rejected": "OpenCode adapter does not support canonical reasoning controls"
+      }
+    },
+    {
+      "name": "anthropic/low",
+      "model": "anthropic",
+      "level": "low",
+      "expect": {
+        "rejected": "OpenCode adapter does not support canonical reasoning controls"
+      }
+    },
+    {
+      "name": "anthropic/medium",
+      "model": "anthropic",
+      "level": "medium",
+      "expect": {
+        "rejected": "OpenCode adapter does not support canonical reasoning controls"
+      }
+    },
+    {
+      "name": "anthropic/high",
+      "model": "anthropic",
+      "level": "high",
+      "expect": {
+        "rejected": "OpenCode adapter does not support canonical reasoning controls"
+      }
+    },
+    {
+      "name": "anthropic/xhigh",
+      "model": "anthropic",
+      "level": "xhigh",
+      "expect": {
+        "rejected": "OpenCode adapter does not support canonical reasoning controls"
+      }
+    },
+    {
+      "name": "anthropic/max",
+      "model": "anthropic",
+      "level": "max",
+      "expect": {
+        "rejected": "OpenCode adapter does not support canonical reasoning controls"
+      }
+    }
+  ]
+}

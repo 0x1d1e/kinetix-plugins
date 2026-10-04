@@ -13,6 +13,7 @@ Guest SDK, first-party plugins, catalog, and `.kxp` packaging for the Kinetix ga
 - Plugins are untrusted by the host; never rely on host leniency for malformed output.
 - Provider-specific behavior must be backed by official documentation or observed upstream behavior.
 - Do not invent model capabilities, pricing, token limits, or credential behavior.
+- Reasoning behavior needs executable proof: adapter and model-source plugins ship `thinking-contract.json` (`docs/thinking-contract.md`); `provides.thinking_translation` without it fails CI.
 - Publishing: a signed release does not make a catalog entry installable; follow `README.md`.
 
 ## Validation

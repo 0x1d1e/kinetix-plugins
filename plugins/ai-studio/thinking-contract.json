@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "kind": "model_source",
+  "plugin": "dev.kinetix.ai-studio",
+  "cases": [
+    {
+      "name": "thinking-model-is-supported-without-control-metadata",
+      "input": {
+        "name": "models/gemini-3.8-flash",
+        "supportedGenerationMethods": [
+          "generateContent"
+        ],
+        "thinking": true
+      },
+      "reasoning": {
+        "supported": true
+      }
+    },
+    {
+      "name": "non-thinking-model-is-unsupported",
+      "input": {
+        "name": "models/gemini-chat",
+        "supportedGenerationMethods": [
+          "generateContent"
+        ],
+        "thinking": false
+      },
+      "reasoning": {
+        "supported": false
+      }
+    },
+    {
+      "name": "missing-thinking-flag-is-unknown",
+      "input": {
+        "name": "models/gemini-unknown",
+        "supportedGenerationMethods": [
+          "generateContent"
+        ]
+      },
+      "reasoning": null
+    }
+  ]
+}

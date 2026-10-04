@@ -1,0 +1,737 @@
+{
+  "schema_version": 1,
+  "kind": "adapter",
+  "plugin": "dev.kinetix.antigravity-oauth",
+  "translation": true,
+  "provider": {
+    "capability_mode": "permissive",
+    "extra_headers": "{\"x-antigravity-project\":\"conformance-project\"}"
+  },
+  "models": {
+    "gemini-3": {
+      "upstream_id": "gemini-3.7-flash-tiered"
+    },
+    "gemini-2.5": {
+      "upstream_id": "gemini-2.5-pro"
+    },
+    "claude-thinking": {
+      "upstream_id": "claude-opus-4-6-thinking"
+    },
+    "claude-no-thinking": {
+      "upstream_id": "claude-opus-4-6"
+    }
+  },
+  "cases": [
+    {
+      "name": "gemini-3/absent",
+      "model": "gemini-3",
+      "level": null,
+      "expect": {
+        "body": {
+          "project": "conformance-project",
+          "model": "gemini-3.7-flash-tiered",
+          "userAgent": "antigravity",
+          "requestType": "agent",
+          "requestId": "agent/e9e7b774-e587-5f45-a147-d4ab9f4fac15/1700000000000/1ebe928e-83fd-5dd4-aeb0-f418d9f663b2/1",
+          "request": {
+            "contents": [
+              {
+                "role": "user",
+                "parts": [
+                  {
+                    "text": "conformance text"
+                  }
+                ]
+              }
+            ],
+            "systemInstruction": {
+              "parts": [
+                {
+                  "text": "conformance system"
+                }
+              ]
+            },
+            "generationConfig": {}
+          }
+        }
+      }
+    },
+    {
+      "name": "gemini-3/off",
+      "model": "gemini-3",
+      "level": "off",
+      "expect": {
+        "body": {
+          "project": "conformance-project",
+          "model": "gemini-3.7-flash-tiered",
+          "userAgent": "antigravity",
+          "requestType": "agent",
+          "requestId": "agent/e9e7b774-e587-5f45-a147-d4ab9f4fac15/1700000000000/1ebe928e-83fd-5dd4-aeb0-f418d9f663b2/1",
+          "request": {
+            "contents": [
+              {
+                "role": "user",
+                "parts": [
+                  {
+                    "text": "conformance text"
+                  }
+                ]
+              }
+            ],
+            "systemInstruction": {
+              "parts": [
+                {
+                  "text": "conformance system"
+                }
+              ]
+            },
+            "generationConfig": {
+              "thinkingConfig": {
+                "thinkingLevel": "minimal",
+                "includeThoughts": false
+              },
+              "maxOutputTokens": 4096
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "gemini-3/default",
+      "model": "gemini-3",
+      "level": "default",
+      "expect": {
+        "rejected": "unsupported canonical thinking level 'default'"
+      }
+    },
+    {
+      "name": "gemini-3/minimal",
+      "model": "gemini-3",
+      "level": "minimal",
+      "expect": {
+        "rejected": "unsupported canonical thinking level 'minimal'"
+      }
+    },
+    {
+      "name": "gemini-3/low",
+      "model": "gemini-3",
+      "level": "low",
+      "expect": {
+        "body": {
+          "project": "conformance-project",
+          "model": "gemini-3.7-flash-tiered",
+          "userAgent": "antigravity",
+          "requestType": "agent",
+          "requestId": "agent/e9e7b774-e587-5f45-a147-d4ab9f4fac15/1700000000000/1ebe928e-83fd-5dd4-aeb0-f418d9f663b2/1",
+          "request": {
+            "contents": [
+              {
+                "role": "user",
+                "parts": [
+                  {
+                    "text": "conformance text"
+                  }
+                ]
+              }
+            ],
+            "systemInstruction": {
+              "parts": [
+                {
+                  "text": "conformance system"
+                }
+              ]
+            },
+            "generationConfig": {
+              "thinkingConfig": {
+                "thinkingLevel": "low",
+                "includeThoughts": true
+              },
+              "maxOutputTokens": 8192
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "gemini-3/medium",
+      "model": "gemini-3",
+      "level": "medium",
+      "expect": {
+        "body": {
+          "project": "conformance-project",
+          "model": "gemini-3.7-flash-tiered",
+          "userAgent": "antigravity",
+          "requestType": "agent",
+          "requestId": "agent/e9e7b774-e587-5f45-a147-d4ab9f4fac15/1700000000000/1ebe928e-83fd-5dd4-aeb0-f418d9f663b2/1",
+          "request": {
+            "contents": [
+              {
+                "role": "user",
+                "parts": [
+                  {
+                    "text": "conformance text"
+                  }
+                ]
+              }
+            ],
+            "systemInstruction": {
+              "parts": [
+                {
+                  "text": "conformance system"
+                }
+              ]
+            },
+            "generationConfig": {
+              "thinkingConfig": {
+                "thinkingLevel": "medium",
+                "includeThoughts": true
+              },
+              "maxOutputTokens": 16384
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "gemini-3/high",
+      "model": "gemini-3",
+      "level": "high",
+      "expect": {
+        "body": {
+          "project": "conformance-project",
+          "model": "gemini-3.7-flash-tiered",
+          "userAgent": "antigravity",
+          "requestType": "agent",
+          "requestId": "agent/e9e7b774-e587-5f45-a147-d4ab9f4fac15/1700000000000/1ebe928e-83fd-5dd4-aeb0-f418d9f663b2/1",
+          "request": {
+            "contents": [
+              {
+                "role": "user",
+                "parts": [
+                  {
+                    "text": "conformance text"
+                  }
+                ]
+              }
+            ],
+            "systemInstruction": {
+              "parts": [
+                {
+                  "text": "conformance system"
+                }
+              ]
+            },
+            "generationConfig": {
+              "thinkingConfig": {
+                "thinkingLevel": "high",
+                "includeThoughts": true
+              },
+              "maxOutputTokens": 64000
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "gemini-3/xhigh",
+      "model": "gemini-3",
+      "level": "xhigh",
+      "expect": {
+        "rejected": "unsupported canonical thinking level 'xhigh'"
+      }
+    },
+    {
+      "name": "gemini-3/max",
+      "model": "gemini-3",
+      "level": "max",
+      "expect": {
+        "rejected": "unsupported canonical thinking level 'max'"
+      }
+    },
+    {
+      "name": "gemini-2.5/absent",
+      "model": "gemini-2.5",
+      "level": null,
+      "expect": {
+        "body": {
+          "project": "conformance-project",
+          "model": "gemini-2.5-pro",
+          "userAgent": "antigravity",
+          "requestType": "agent",
+          "requestId": "agent/e9e7b774-e587-5f45-a147-d4ab9f4fac15/1700000000000/743f335b-fe0f-5f67-b5da-abfc15789470/1",
+          "request": {
+            "contents": [
+              {
+                "role": "user",
+                "parts": [
+                  {
+                    "text": "conformance text"
+                  }
+                ]
+              }
+            ],
+            "systemInstruction": {
+              "parts": [
+                {
+                  "text": "conformance system"
+                }
+              ]
+            },
+            "generationConfig": {}
+          }
+        }
+      }
+    },
+    {
+      "name": "gemini-2.5/off",
+      "model": "gemini-2.5",
+      "level": "off",
+      "expect": {
+        "body": {
+          "project": "conformance-project",
+          "model": "gemini-2.5-pro",
+          "userAgent": "antigravity",
+          "requestType": "agent",
+          "requestId": "agent/e9e7b774-e587-5f45-a147-d4ab9f4fac15/1700000000000/743f335b-fe0f-5f67-b5da-abfc15789470/1",
+          "request": {
+            "contents": [
+              {
+                "role": "user",
+                "parts": [
+                  {
+                    "text": "conformance text"
+                  }
+                ]
+              }
+            ],
+            "systemInstruction": {
+              "parts": [
+                {
+                  "text": "conformance system"
+                }
+              ]
+            },
+            "generationConfig": {
+              "thinkingConfig": {
+                "thinkingBudget": 0,
+                "includeThoughts": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "gemini-2.5/default",
+      "model": "gemini-2.5",
+      "level": "default",
+      "expect": {
+        "rejected": "unsupported canonical thinking level 'default'"
+      }
+    },
+    {
+      "name": "gemini-2.5/minimal",
+      "model": "gemini-2.5",
+      "level": "minimal",
+      "expect": {
+        "rejected": "unsupported canonical thinking level 'minimal'"
+      }
+    },
+    {
+      "name": "gemini-2.5/low",
+      "model": "gemini-2.5",
+      "level": "low",
+      "expect": {
+        "body": {
+          "project": "conformance-project",
+          "model": "gemini-2.5-pro",
+          "userAgent": "antigravity",
+          "requestType": "agent",
+          "requestId": "agent/e9e7b774-e587-5f45-a147-d4ab9f4fac15/1700000000000/743f335b-fe0f-5f67-b5da-abfc15789470/1",
+          "request": {
+            "contents": [
+              {
+                "role": "user",
+                "parts": [
+                  {
+                    "text": "conformance text"
+                  }
+                ]
+              }
+            ],
+            "systemInstruction": {
+              "parts": [
+                {
+                  "text": "conformance system"
+                }
+              ]
+            },
+            "generationConfig": {
+              "thinkingConfig": {
+                "thinkingBudget": 1024,
+                "includeThoughts": true
+              },
+              "maxOutputTokens": 8192
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "gemini-2.5/medium",
+      "model": "gemini-2.5",
+      "level": "medium",
+      "expect": {
+        "body": {
+          "project": "conformance-project",
+          "model": "gemini-2.5-pro",
+          "userAgent": "antigravity",
+          "requestType": "agent",
+          "requestId": "agent/e9e7b774-e587-5f45-a147-d4ab9f4fac15/1700000000000/743f335b-fe0f-5f67-b5da-abfc15789470/1",
+          "request": {
+            "contents": [
+              {
+                "role": "user",
+                "parts": [
+                  {
+                    "text": "conformance text"
+                  }
+                ]
+              }
+            ],
+            "systemInstruction": {
+              "parts": [
+                {
+                  "text": "conformance system"
+                }
+              ]
+            },
+            "generationConfig": {
+              "thinkingConfig": {
+                "thinkingBudget": 8192,
+                "includeThoughts": true
+              },
+              "maxOutputTokens": 16384
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "gemini-2.5/high",
+      "model": "gemini-2.5",
+      "level": "high",
+      "expect": {
+        "body": {
+          "project": "conformance-project",
+          "model": "gemini-2.5-pro",
+          "userAgent": "antigravity",
+          "requestType": "agent",
+          "requestId": "agent/e9e7b774-e587-5f45-a147-d4ab9f4fac15/1700000000000/743f335b-fe0f-5f67-b5da-abfc15789470/1",
+          "request": {
+            "contents": [
+              {
+                "role": "user",
+                "parts": [
+                  {
+                    "text": "conformance text"
+                  }
+                ]
+              }
+            ],
+            "systemInstruction": {
+              "parts": [
+                {
+                  "text": "conformance system"
+                }
+              ]
+            },
+            "generationConfig": {
+              "thinkingConfig": {
+                "thinkingBudget": 24576,
+                "includeThoughts": true
+              },
+              "maxOutputTokens": 32768
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "gemini-2.5/xhigh",
+      "model": "gemini-2.5",
+      "level": "xhigh",
+      "expect": {
+        "rejected": "unsupported canonical thinking level 'xhigh'"
+      }
+    },
+    {
+      "name": "gemini-2.5/max",
+      "model": "gemini-2.5",
+      "level": "max",
+      "expect": {
+        "rejected": "unsupported canonical thinking level 'max'"
+      }
+    },
+    {
+      "name": "claude-thinking/absent",
+      "model": "claude-thinking",
+      "level": null,
+      "expect": {
+        "body": {
+          "project": "conformance-project",
+          "model": "claude-opus-4-6-thinking",
+          "userAgent": "antigravity",
+          "requestType": "agent",
+          "requestId": "agent/e9e7b774-e587-5f45-a147-d4ab9f4fac15/1700000000000/6f96396c-cf6c-5194-9d10-94a2a7ec48e3/1",
+          "request": {
+            "contents": [
+              {
+                "role": "user",
+                "parts": [
+                  {
+                    "text": "conformance text"
+                  }
+                ]
+              }
+            ],
+            "systemInstruction": {
+              "parts": [
+                {
+                  "text": "conformance system"
+                }
+              ]
+            },
+            "generationConfig": {}
+          }
+        }
+      }
+    },
+    {
+      "name": "claude-thinking/off",
+      "model": "claude-thinking",
+      "level": "off",
+      "expect": {
+        "rejected": "unsupported canonical thinking level 'off' for Antigravity Claude thinking model 'claude-opus-4-6-thinking'; supported levels: low, max"
+      }
+    },
+    {
+      "name": "claude-thinking/default",
+      "model": "claude-thinking",
+      "level": "default",
+      "expect": {
+        "rejected": "unsupported canonical thinking level 'default' for Antigravity Claude thinking model 'claude-opus-4-6-thinking'; supported levels: low, max"
+      }
+    },
+    {
+      "name": "claude-thinking/minimal",
+      "model": "claude-thinking",
+      "level": "minimal",
+      "expect": {
+        "rejected": "unsupported canonical thinking level 'minimal' for Antigravity Claude thinking model 'claude-opus-4-6-thinking'; supported levels: low, max"
+      }
+    },
+    {
+      "name": "claude-thinking/low",
+      "model": "claude-thinking",
+      "level": "low",
+      "expect": {
+        "body": {
+          "project": "conformance-project",
+          "model": "claude-opus-4-6-thinking",
+          "userAgent": "antigravity",
+          "requestType": "agent",
+          "requestId": "agent/e9e7b774-e587-5f45-a147-d4ab9f4fac15/1700000000000/6f96396c-cf6c-5194-9d10-94a2a7ec48e3/1",
+          "request": {
+            "contents": [
+              {
+                "role": "user",
+                "parts": [
+                  {
+                    "text": "conformance text"
+                  }
+                ]
+              }
+            ],
+            "systemInstruction": {
+              "parts": [
+                {
+                  "text": "conformance system"
+                }
+              ]
+            },
+            "generationConfig": {
+              "thinkingConfig": {
+                "thinkingBudget": 8192,
+                "includeThoughts": true
+              },
+              "maxOutputTokens": 16384
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "claude-thinking/medium",
+      "model": "claude-thinking",
+      "level": "medium",
+      "expect": {
+        "rejected": "unsupported canonical thinking level 'medium' for Antigravity Claude thinking model 'claude-opus-4-6-thinking'; supported levels: low, max"
+      }
+    },
+    {
+      "name": "claude-thinking/high",
+      "model": "claude-thinking",
+      "level": "high",
+      "expect": {
+        "rejected": "unsupported canonical thinking level 'high' for Antigravity Claude thinking model 'claude-opus-4-6-thinking'; supported levels: low, max"
+      }
+    },
+    {
+      "name": "claude-thinking/xhigh",
+      "model": "claude-thinking",
+      "level": "xhigh",
+      "expect": {
+        "rejected": "unsupported canonical thinking level 'xhigh' for Antigravity Claude thinking model 'claude-opus-4-6-thinking'; supported levels: low, max"
+      }
+    },
+    {
+      "name": "claude-thinking/max",
+      "model": "claude-thinking",
+      "level": "max",
+      "expect": {
+        "body": {
+          "project": "conformance-project",
+          "model": "claude-opus-4-6-thinking",
+          "userAgent": "antigravity",
+          "requestType": "agent",
+          "requestId": "agent/e9e7b774-e587-5f45-a147-d4ab9f4fac15/1700000000000/6f96396c-cf6c-5194-9d10-94a2a7ec48e3/1",
+          "request": {
+            "contents": [
+              {
+                "role": "user",
+                "parts": [
+                  {
+                    "text": "conformance text"
+                  }
+                ]
+              }
+            ],
+            "systemInstruction": {
+              "parts": [
+                {
+                  "text": "conformance system"
+                }
+              ]
+            },
+            "generationConfig": {
+              "thinkingConfig": {
+                "thinkingBudget": 32768,
+                "includeThoughts": true
+              },
+              "maxOutputTokens": 40960
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "claude-no-thinking/absent",
+      "model": "claude-no-thinking",
+      "level": null,
+      "expect": {
+        "body": {
+          "project": "conformance-project",
+          "model": "claude-opus-4-6",
+          "userAgent": "antigravity",
+          "requestType": "agent",
+          "requestId": "agent/e9e7b774-e587-5f45-a147-d4ab9f4fac15/1700000000000/d01c2f5f-37a9-5057-a787-7349a930893c/1",
+          "request": {
+            "contents": [
+              {
+                "role": "user",
+                "parts": [
+                  {
+                    "text": "conformance text"
+                  }
+                ]
+              }
+            ],
+            "systemInstruction": {
+              "parts": [
+                {
+                  "text": "conformance system"
+                }
+              ]
+            },
+            "generationConfig": {}
+          }
+        }
+      }
+    },
+    {
+      "name": "claude-no-thinking/off",
+      "model": "claude-no-thinking",
+      "level": "off",
+      "expect": {
+        "rejected": "canonical thinking controls are unsupported for Antigravity model 'claude-opus-4-6'"
+      }
+    },
+    {
+      "name": "claude-no-thinking/default",
+      "model": "claude-no-thinking",
+      "level": "default",
+      "expect": {
+        "rejected": "canonical thinking controls are unsupported for Antigravity model 'claude-opus-4-6'"
+      }
+    },
+    {
+      "name": "claude-no-thinking/minimal",
+      "model": "claude-no-thinking",
+      "level": "minimal",
+      "expect": {
+        "rejected": "canonical thinking controls are unsupported for Antigravity model 'claude-opus-4-6'"
+      }
+    },
+    {
+      "name": "claude-no-thinking/low",
+      "model": "claude-no-thinking",
+      "level": "low",
+      "expect": {
+        "rejected": "canonical thinking controls are unsupported for Antigravity model 'claude-opus-4-6'"
+      }
+    },
+    {
+      "name": "claude-no-thinking/medium",
+      "model": "claude-no-thinking",
+      "level": "medium",
+      "expect": {
+        "rejected": "canonical thinking controls are unsupported for Antigravity model 'claude-opus-4-6'"
+      }
+    },
+    {
+      "name": "claude-no-thinking/high",
+      "model": "claude-no-thinking",
+      "level": "high",
+      "expect": {
+        "rejected": "canonical thinking controls are unsupported for Antigravity model 'claude-opus-4-6'"
+      }
+    },
+    {
+      "name": "claude-no-thinking/xhigh",
+      "model": "claude-no-thinking",
+      "level": "xhigh",
+      "expect": {
+        "rejected": "canonical thinking controls are unsupported for Antigravity model 'claude-opus-4-6'"
+      }
+    },
+    {
+      "name": "claude-no-thinking/max",
+      "model": "claude-no-thinking",
+      "level": "max",
+      "expect": {
+        "rejected": "canonical thinking controls are unsupported for Antigravity model 'claude-opus-4-6'"
+      }
+    }
+  ]
+}

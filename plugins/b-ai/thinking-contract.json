@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "kind": "model_source",
+  "plugin": "dev.kinetix.b-ai",
+  "cases": [
+    {
+      "name": "level-low-high-max-with-disable",
+      "input": {
+        "id": "DeepSeek-V4.1-Flash"
+      },
+      "reasoning": {
+        "supported": true,
+        "mode": "level",
+        "levels": [
+          "low",
+          "high",
+          "max"
+        ],
+        "default": "high",
+        "can_disable": true
+      }
+    },
+    {
+      "name": "level-vision-exp",
+      "input": {
+        "id": "DeepSeek-V4-Flash-Vision-Exp"
+      },
+      "reasoning": {
+        "supported": true,
+        "mode": "level",
+        "levels": [
+          "low",
+          "high",
+          "max"
+        ],
+        "default": "high",
+        "can_disable": true
+      }
+    },
+    {
+      "name": "supported-without-control-metadata",
+      "input": {
+        "id": "DeepSeek-V4-Flash"
+      },
+      "reasoning": {
+        "supported": true
+      }
+    },
+    {
+      "name": "uncataloged-model-is-unknown",
+      "input": {
+        "id": "future-model-not-in-catalog"
+      },
+      "reasoning": null
+    }
+  ]
+}
