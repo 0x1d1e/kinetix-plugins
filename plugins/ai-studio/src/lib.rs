@@ -100,8 +100,13 @@ fn read_api_key(credential: &ModelCredentialRef) -> Result<String, ModelPluginEr
 
 #[cfg(not(test))]
 fn send_request(request: &ModelHttpRequest) -> Result<ModelHttpResponse, ModelPluginError> {
-    model_world::kinetix::plugin::host_http::send(request)
-        .map_err(|error| model_error(&error.code, error.message, error.retryable))
+    model_world::kinetix::plugin::host_http::send(request).map_err(|error| ModelPluginError {
+        code: error.code,
+        message: error.message,
+        retryable: error.retryable,
+        retry_after: error.retry_after,
+        reset_at: error.reset_at,
+    })
 }
 
 #[cfg(test)]
@@ -281,13 +286,6 @@ impl model_world::exports::account_model_source::Guest for Component {
             ));
         }
 
-        let body = String::from_utf8(response.body).map_err(|_| {
-            model_error(
-                "protocol_error",
-                "AI Studio model catalog is not UTF-8",
-                false,
-            )
-        })?;
         if response.status != 200 {
             let (code, retryable) = match response.status {
                 401 | 403 => ("credential_expired", false),
@@ -302,6 +300,13 @@ impl model_world::exports::account_model_source::Guest for Component {
             ));
         }
 
+        let body = String::from_utf8(response.body).map_err(|_| {
+            model_error(
+                "protocol_error",
+                "AI Studio model catalog is not UTF-8",
+                false,
+            )
+        })?;
         let value: Value = serde_json::from_str(&body).map_err(|error| {
             model_error(
                 "protocol_error",

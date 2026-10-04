@@ -1,0 +1,993 @@
+{
+  "schema": "kinetix.credential-strategy.conformance",
+  "schema_version": 1,
+  "description": "Credential strategy lifecycle cases. Run against the compiled plugin component with a scripted host. Credential state is abstract; each plugin profile maps it to its own storage shape. expiry: null (none), {window_delta_ms} relative to the profile's refresh window edge, or {in_ms} relative to now. HTTP outcomes: status with json|text|hex body, optional truncated, or failure (host transport error).",
+  "now_unix_millis": 1700000000000,
+  "cases": [
+    {
+      "id": "fresh-token-is-not-refreshed",
+      "description": "A token well outside the refresh window is leased as-is.",
+      "credential": {
+        "access_token": "at-stored",
+        "refresh_token": "rt-stored",
+        "expiry": {
+          "window_delta_ms": 3600000
+        }
+      },
+      "http": [],
+      "steps": [
+        {
+          "call": "resolve",
+          "expect": {
+            "ok": {
+              "requests": 0,
+              "leased_access_token": "at-stored",
+              "lease_health": "healthy"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "token-just-outside-refresh-window",
+      "description": "One millisecond beyond the window is still fresh.",
+      "credential": {
+        "access_token": "at-stored",
+        "refresh_token": "rt-stored",
+        "expiry": {
+          "window_delta_ms": 1
+        }
+      },
+      "http": [],
+      "steps": [
+        {
+          "call": "resolve",
+          "expect": {
+            "ok": {
+              "requests": 0,
+              "leased_access_token": "at-stored"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "token-at-refresh-window-edge-refreshes",
+      "description": "Expiry exactly at the window edge refreshes.",
+      "credential": {
+        "access_token": "at-stored",
+        "refresh_token": "rt-stored",
+        "expiry": {
+          "window_delta_ms": 0
+        }
+      },
+      "http": [
+        {
+          "status": 200,
+          "json": {
+            "access_token": "at-new",
+            "refresh_token": "rt-stored",
+            "expires_in": 172800
+          }
+        }
+      ],
+      "steps": [
+        {
+          "call": "resolve",
+          "expect": {
+            "ok": {
+              "requests": 1,
+              "refresh_token_sent": "rt-stored",
+              "leased_access_token": "at-new",
+              "lease_health": "healthy"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "token-inside-refresh-window-refreshes",
+      "description": "Expiry inside the window refreshes.",
+      "credential": {
+        "access_token": "at-stored",
+        "refresh_token": "rt-stored",
+        "expiry": {
+          "window_delta_ms": -1000
+        }
+      },
+      "http": [
+        {
+          "status": 200,
+          "json": {
+            "access_token": "at-new",
+            "refresh_token": "rt-stored",
+            "expires_in": 172800
+          }
+        }
+      ],
+      "steps": [
+        {
+          "call": "resolve",
+          "expect": {
+            "ok": {
+              "requests": 1,
+              "leased_access_token": "at-new"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "expired-token-refreshes",
+      "description": "An already expired token refreshes without underflow.",
+      "credential": {
+        "access_token": "at-stored",
+        "refresh_token": "rt-stored",
+        "expiry": {
+          "in_ms": -86400000
+        }
+      },
+      "http": [
+        {
+          "status": 200,
+          "json": {
+            "access_token": "at-new",
+            "refresh_token": "rt-stored",
+            "expires_in": 172800
+          }
+        }
+      ],
+      "steps": [
+        {
+          "call": "resolve",
+          "expect": {
+            "ok": {
+              "requests": 1,
+              "leased_access_token": "at-new"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "non-expiring-token-is-trusted",
+      "description": "A stored token with no expiry metadata is used without a refresh.",
+      "when": {
+        "missing_expiry_on_stored_token": "trust"
+      },
+      "credential": {
+        "access_token": "at-stored",
+        "refresh_token": "rt-stored"
+      },
+      "http": [],
+      "steps": [
+        {
+          "call": "resolve",
+          "expect": {
+            "ok": {
+              "requests": 0,
+              "leased_access_token": "at-stored"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "unknown-expiry-refreshes-before-lease",
+      "description": "A stored token with no expiry metadata is refreshed before it is leased.",
+      "when": {
+        "missing_expiry_on_stored_token": "refresh"
+      },
+      "credential": {
+        "access_token": "at-stored",
+        "refresh_token": "rt-stored"
+      },
+      "http": [
+        {
+          "status": 200,
+          "json": {
+            "access_token": "at-new",
+            "refresh_token": "rt-stored",
+            "expires_in": 172800
+          }
+        }
+      ],
+      "steps": [
+        {
+          "call": "resolve",
+          "expect": {
+            "ok": {
+              "requests": 1,
+              "leased_access_token": "at-new"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "rotated-refresh-token-is-persisted-and-used",
+      "description": "A rotated refresh token is persisted and sent on the next refresh.",
+      "credential": {
+        "access_token": "at-stored",
+        "refresh_token": "rt-stored",
+        "expiry": {
+          "window_delta_ms": 0
+        }
+      },
+      "http": [
+        {
+          "status": 200,
+          "json": {
+            "access_token": "at-1",
+            "refresh_token": "rt-rotated-1",
+            "expires_in": 172800
+          }
+        },
+        {
+          "status": 200,
+          "json": {
+            "access_token": "at-2",
+            "refresh_token": "rt-rotated-2",
+            "expires_in": 172800
+          }
+        }
+      ],
+      "steps": [
+        {
+          "call": "resolve",
+          "expect": {
+            "ok": {
+              "requests": 1,
+              "refresh_token_sent": "rt-stored",
+              "persisted": {
+                "access_token": "at-1",
+                "refresh_token": "rt-rotated-1",
+                "expiry": {
+                  "in_ms": 172800000
+                }
+              }
+            }
+          }
+        },
+        {
+          "advance_ms": 172800000
+        },
+        {
+          "call": "resolve",
+          "expect": {
+            "ok": {
+              "requests": 1,
+              "refresh_token_sent": "rt-rotated-1",
+              "leased_access_token": "at-2",
+              "persisted": {
+                "refresh_token": "rt-rotated-2"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "omitted-refresh-token-keeps-previous",
+      "description": "A response without refresh_token must not erase the one in use.",
+      "credential": {
+        "access_token": "at-stored",
+        "refresh_token": "rt-stored",
+        "expiry": {
+          "window_delta_ms": 0
+        }
+      },
+      "http": [
+        {
+          "status": 200,
+          "json": {
+            "access_token": "at-1",
+            "expires_in": 172800
+          }
+        },
+        {
+          "status": 200,
+          "json": {
+            "access_token": "at-2",
+            "expires_in": 172800
+          }
+        }
+      ],
+      "steps": [
+        {
+          "call": "resolve",
+          "expect": {
+            "ok": {
+              "requests": 1,
+              "persisted": {
+                "access_token": "at-1",
+                "refresh_token": "rt-stored"
+              }
+            }
+          }
+        },
+        {
+          "advance_ms": 172800000
+        },
+        {
+          "call": "resolve",
+          "expect": {
+            "ok": {
+              "requests": 1,
+              "refresh_token_sent": "rt-stored",
+              "leased_access_token": "at-2",
+              "persisted": {
+                "refresh_token": "rt-stored"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "missing-refresh-token-is-terminal",
+      "description": "A token that needs refresh but has no refresh token cannot recover.",
+      "credential": {
+        "access_token": "at-stored",
+        "expiry": {
+          "in_ms": -1000
+        }
+      },
+      "http": [],
+      "steps": [
+        {
+          "call": "resolve",
+          "expect": {
+            "error": {
+              "code": "credential_expired",
+              "retryable": false,
+              "requests": 0,
+              "storage_unchanged": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "empty-refresh-token-is-terminal",
+      "description": "An empty refresh token is treated as absent, with no upstream call.",
+      "credential": {
+        "access_token": "at-stored",
+        "refresh_token": "",
+        "expiry": {
+          "in_ms": -1000
+        }
+      },
+      "http": [],
+      "steps": [
+        {
+          "call": "resolve",
+          "expect": {
+            "error": {
+              "code": "credential_expired",
+              "retryable": false,
+              "requests": 0,
+              "storage_unchanged": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "invalid-grant-is-terminal",
+      "description": "invalid_grant means the credential is revoked: terminal, not retryable.",
+      "credential": {
+        "access_token": "at-stored",
+        "refresh_token": "rt-stored",
+        "expiry": {
+          "window_delta_ms": 0
+        }
+      },
+      "http": [
+        {
+          "status": 400,
+          "json": {
+            "error": "invalid_grant",
+            "error_description": "Refresh token not found or invalid"
+          }
+        }
+      ],
+      "steps": [
+        {
+          "call": "resolve",
+          "expect": {
+            "error": {
+              "code": "credential_expired",
+              "retryable": false,
+              "requests": 1,
+              "storage_unchanged": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "invalid-grant-with-401-is-terminal",
+      "description": "The invalid_grant body wins over the HTTP status.",
+      "credential": {
+        "access_token": "at-stored",
+        "refresh_token": "rt-stored",
+        "expiry": {
+          "window_delta_ms": 0
+        }
+      },
+      "http": [
+        {
+          "status": 401,
+          "json": {
+            "error": "invalid_grant"
+          }
+        }
+      ],
+      "steps": [
+        {
+          "call": "resolve",
+          "expect": {
+            "error": {
+              "code": "credential_expired",
+              "retryable": false,
+              "requests": 1,
+              "storage_unchanged": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "http-429-is-retryable",
+      "description": "HTTP 429 from the token endpoint is transient.",
+      "credential": {
+        "access_token": "at-stored",
+        "refresh_token": "rt-stored",
+        "expiry": {
+          "window_delta_ms": 0
+        }
+      },
+      "http": [
+        {
+          "status": 429,
+          "json": {
+            "error": "temporarily_unavailable"
+          }
+        }
+      ],
+      "steps": [
+        {
+          "call": "resolve",
+          "expect": {
+            "error": {
+              "code": "upstream_unavailable",
+              "retryable": true,
+              "requests": 1,
+              "storage_unchanged": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "http-500-is-retryable",
+      "description": "HTTP 500 from the token endpoint is transient.",
+      "credential": {
+        "access_token": "at-stored",
+        "refresh_token": "rt-stored",
+        "expiry": {
+          "window_delta_ms": 0
+        }
+      },
+      "http": [
+        {
+          "status": 500,
+          "json": {
+            "error": "temporarily_unavailable"
+          }
+        }
+      ],
+      "steps": [
+        {
+          "call": "resolve",
+          "expect": {
+            "error": {
+              "code": "upstream_unavailable",
+              "retryable": true,
+              "requests": 1,
+              "storage_unchanged": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "http-503-is-retryable",
+      "description": "HTTP 503 from the token endpoint is transient.",
+      "credential": {
+        "access_token": "at-stored",
+        "refresh_token": "rt-stored",
+        "expiry": {
+          "window_delta_ms": 0
+        }
+      },
+      "http": [
+        {
+          "status": 503,
+          "json": {
+            "error": "temporarily_unavailable"
+          }
+        }
+      ],
+      "steps": [
+        {
+          "call": "resolve",
+          "expect": {
+            "error": {
+              "code": "upstream_unavailable",
+              "retryable": true,
+              "requests": 1,
+              "storage_unchanged": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "transport-failure-is-retryable-and-keeps-retry-after",
+      "description": "A host transport failure is transient and keeps the host's retry-after.",
+      "credential": {
+        "access_token": "at-stored",
+        "refresh_token": "rt-stored",
+        "expiry": {
+          "window_delta_ms": 0
+        }
+      },
+      "http": [
+        {
+          "failure": {
+            "code": "upstream_timeout",
+            "message": "timed out",
+            "retryable": true,
+            "retry_after": 7
+          }
+        }
+      ],
+      "steps": [
+        {
+          "call": "resolve",
+          "expect": {
+            "error": {
+              "code": "upstream_unavailable",
+              "retryable": true,
+              "retry_after": 7,
+              "requests": 1,
+              "storage_unchanged": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "truncated-response-is-retryable",
+      "description": "A truncated token response is never parsed as complete.",
+      "credential": {
+        "access_token": "at-stored",
+        "refresh_token": "rt-stored",
+        "expiry": {
+          "window_delta_ms": 0
+        }
+      },
+      "http": [
+        {
+          "status": 200,
+          "truncated": true,
+          "json": {
+            "access_token": "at-new",
+            "refresh_token": "rt-new",
+            "expires_in": 3600
+          }
+        }
+      ],
+      "steps": [
+        {
+          "call": "resolve",
+          "expect": {
+            "error": {
+              "code": "upstream_unavailable",
+              "retryable": true,
+              "requests": 1,
+              "storage_unchanged": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "non-json-success-is-protocol-error",
+      "description": "A 200 that is not JSON is a protocol error.",
+      "credential": {
+        "access_token": "at-stored",
+        "refresh_token": "rt-stored",
+        "expiry": {
+          "window_delta_ms": 0
+        }
+      },
+      "http": [
+        {
+          "status": 200,
+          "text": "<html>ok</html>"
+        }
+      ],
+      "steps": [
+        {
+          "call": "resolve",
+          "expect": {
+            "error": {
+              "code": "protocol_error",
+              "retryable": false,
+              "requests": 1,
+              "storage_unchanged": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "non-utf8-success-is-protocol-error",
+      "description": "A 200 with non-UTF-8 bytes is a protocol error.",
+      "credential": {
+        "access_token": "at-stored",
+        "refresh_token": "rt-stored",
+        "expiry": {
+          "window_delta_ms": 0
+        }
+      },
+      "http": [
+        {
+          "status": 200,
+          "hex": "fffefd"
+        }
+      ],
+      "steps": [
+        {
+          "call": "resolve",
+          "expect": {
+            "error": {
+              "code": "protocol_error",
+              "retryable": false,
+              "requests": 1,
+              "storage_unchanged": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "missing-access-token-is-protocol-error",
+      "description": "A 200 without access_token is a protocol error.",
+      "credential": {
+        "access_token": "at-stored",
+        "refresh_token": "rt-stored",
+        "expiry": {
+          "window_delta_ms": 0
+        }
+      },
+      "http": [
+        {
+          "status": 200,
+          "json": {
+            "refresh_token": "rt-new",
+            "expires_in": 3600
+          }
+        }
+      ],
+      "steps": [
+        {
+          "call": "resolve",
+          "expect": {
+            "error": {
+              "code": "protocol_error",
+              "retryable": false,
+              "requests": 1,
+              "storage_unchanged": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "empty-access-token-is-protocol-error",
+      "description": "An empty access_token is a protocol error.",
+      "credential": {
+        "access_token": "at-stored",
+        "refresh_token": "rt-stored",
+        "expiry": {
+          "window_delta_ms": 0
+        }
+      },
+      "http": [
+        {
+          "status": 200,
+          "json": {
+            "access_token": "",
+            "expires_in": 3600
+          }
+        }
+      ],
+      "steps": [
+        {
+          "call": "resolve",
+          "expect": {
+            "error": {
+              "code": "protocol_error",
+              "retryable": false,
+              "requests": 1,
+              "storage_unchanged": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "unrelated-client-error-is-terminal",
+      "description": "A non-transient client error that is not invalid_grant is terminal.",
+      "credential": {
+        "access_token": "at-stored",
+        "refresh_token": "rt-stored",
+        "expiry": {
+          "window_delta_ms": 0
+        }
+      },
+      "http": [
+        {
+          "status": 400,
+          "json": {
+            "error": "invalid_client"
+          }
+        }
+      ],
+      "steps": [
+        {
+          "call": "resolve",
+          "expect": {
+            "error": {
+              "code": "protocol_error",
+              "retryable": false,
+              "requests": 1,
+              "storage_unchanged": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "missing-expires-in-follows-policy",
+      "description": "A response without expires_in yields exactly the policy-declared expiry.",
+      "credential": {
+        "access_token": "at-stored",
+        "refresh_token": "rt-stored",
+        "expiry": {
+          "window_delta_ms": 0
+        }
+      },
+      "http": [
+        {
+          "status": 200,
+          "json": {
+            "access_token": "at-new",
+            "refresh_token": "rt-new"
+          }
+        }
+      ],
+      "steps": [
+        {
+          "call": "resolve",
+          "expect": {
+            "ok": {
+              "requests": 1,
+              "leased_access_token": "at-new",
+              "persisted": {
+                "access_token": "at-new",
+                "expiry": "per_policy"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "explicit-rotate-persists-lifecycle-state",
+      "description": "rotate() refreshes a fresh token and persists the complete new state.",
+      "credential": {
+        "access_token": "at-stored",
+        "refresh_token": "rt-stored",
+        "expiry": {
+          "window_delta_ms": 3600000
+        }
+      },
+      "http": [
+        {
+          "status": 200,
+          "json": {
+            "access_token": "at-rot",
+            "refresh_token": "rt-rot",
+            "expires_in": 172800
+          }
+        }
+      ],
+      "steps": [
+        {
+          "call": "rotate",
+          "expect": {
+            "ok": {
+              "requests": 1,
+              "refresh_token_sent": "rt-stored",
+              "persisted": {
+                "access_token": "at-rot",
+                "refresh_token": "rt-rot",
+                "expiry": {
+                  "in_ms": 172800000
+                }
+              }
+            }
+          }
+        },
+        {
+          "call": "resolve",
+          "expect": {
+            "ok": {
+              "requests": 0,
+              "leased_access_token": "at-rot"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "failed-rotate-keeps-persisted-state",
+      "description": "A failed rotate neither corrupts nor drops the usable credential.",
+      "credential": {
+        "access_token": "at-stored",
+        "refresh_token": "rt-stored",
+        "expiry": {
+          "window_delta_ms": 3600000
+        }
+      },
+      "http": [
+        {
+          "status": 500,
+          "json": {}
+        }
+      ],
+      "steps": [
+        {
+          "call": "rotate",
+          "expect": {
+            "error": {
+              "code": "upstream_unavailable",
+              "retryable": true,
+              "requests": 1,
+              "storage_unchanged": true
+            }
+          }
+        },
+        {
+          "call": "resolve",
+          "expect": {
+            "ok": {
+              "requests": 0,
+              "leased_access_token": "at-stored"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "rotate-without-refresh-token-is-terminal",
+      "description": "rotate() cannot proceed without a refresh token.",
+      "credential": {
+        "access_token": "at-stored",
+        "expiry": {
+          "window_delta_ms": 3600000
+        }
+      },
+      "http": [],
+      "steps": [
+        {
+          "call": "rotate",
+          "expect": {
+            "error": {
+              "code": "credential_expired",
+              "retryable": false,
+              "requests": 0,
+              "storage_unchanged": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "unreadable-credential-is-credential-expired",
+      "description": "A credential the host cannot read is terminal.",
+      "credential": null,
+      "http": [],
+      "steps": [
+        {
+          "call": "resolve",
+          "expect": {
+            "error": {
+              "code": "credential_expired",
+              "retryable": false,
+              "requests": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "health-fresh-token-is-healthy",
+      "description": "health() reports a usable credential without network use.",
+      "credential": {
+        "access_token": "at-stored",
+        "refresh_token": "rt-stored",
+        "expiry": {
+          "window_delta_ms": 3600000
+        }
+      },
+      "http": [],
+      "steps": [
+        {
+          "call": "health",
+          "expect": {
+            "ok": {
+              "requests": 0,
+              "health": "healthy"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "health-refreshable-token-is-healthy",
+      "description": "An expired token with a refresh token is refreshable, so healthy.",
+      "credential": {
+        "access_token": "at-stored",
+        "refresh_token": "rt-stored",
+        "expiry": {
+          "in_ms": -1000
+        }
+      },
+      "http": [],
+      "steps": [
+        {
+          "call": "health",
+          "expect": {
+            "ok": {
+              "requests": 0,
+              "health": "healthy"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "health-credential-without-tokens-is-unusable",
+      "description": "Neither token present is unusable.",
+      "credential": {},
+      "http": [],
+      "steps": [
+        {
+          "call": "health",
+          "expect": {
+            "ok": {
+              "requests": 0,
+              "health": "unusable"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

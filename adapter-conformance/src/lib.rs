@@ -8,6 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use kinetix_plugin_sdk::schema::{Disposition, SchemaMode, SchemaProfile};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -29,8 +30,8 @@ const REQUEST_TOOL_ERROR: &str =
     include_str!("../../wit/fixtures/plugin-adapter/v1/requests/tool-result-error.json");
 const REQUEST_SCHEMA: &str =
     include_str!("../../wit/fixtures/plugin-adapter/v1/requests/structured-schema.json");
-const REQUEST_SCHEMA_MAX_LENGTH: &str =
-    include_str!("../../wit/fixtures/plugin-adapter/v1/requests/schema-max-length.json");
+const SCHEMA_KEYWORDS: &str =
+    include_str!("../../wit/fixtures/plugin-adapter/v1/schema-keywords.json");
 const REQUEST_MALFORMED_TOOL_ARGUMENTS: &str =
     include_str!("../../wit/fixtures/plugin-adapter/v1/requests/malformed-tool-arguments.json");
 const REQUEST_MALFORMED_TOOL_HISTORY: &str =
@@ -53,7 +54,6 @@ const REQUIRED_CAPABILITIES: &[&str] = &[
     "reasoning_controls",
     "reasoning_output",
     "structured_schemas",
-    "schema_max_length",
     "stop_reasons",
     "usage_extraction",
     "error_classification",
@@ -83,6 +83,10 @@ struct TransportProfile {
     model: Value,
     #[serde(default = "empty_object")]
     provider: Value,
+    /// SDK schema profile whose keyword dispositions this transport's wire
+    /// must reflect. Required when `structured_schemas` is supported.
+    #[serde(default)]
+    schema_profile: Option<String>,
     capabilities: BTreeMap<String, CapabilityStatus>,
 }
 
@@ -102,7 +106,7 @@ fn empty_object() -> Value {
 pub fn check(adapter: &impl Adapter, profile_json: &str) -> Result<(), String> {
     let profile: Profile = serde_json::from_str(profile_json)
         .map_err(|error| format!("invalid adapter conformance profile: {error}"))?;
-    if profile.schema_version != 1 {
+    if profile.schema_version != 2 {
         return Err(format!(
             "{} profile has unsupported schema_version {}",
             profile.adapter, profile.schema_version
@@ -180,14 +184,7 @@ pub fn check(adapter: &impl Adapter, profile_json: &str) -> Result<(), String> {
             REQUEST_SCHEMA,
             &["query", "required", "Search files"],
         )?;
-        check_request_feature(
-            adapter,
-            &context,
-            transport,
-            "schema_max_length",
-            REQUEST_SCHEMA_MAX_LENGTH,
-            &["maxLength", "32"],
-        )?;
+        check_schema_keywords(adapter, &context, transport)?;
         check_malformed_tool_arguments(adapter, &context, transport)?;
         check_malformed_tool_history(adapter, &context, transport)?;
         check_mixed_request(adapter, &context, transport)?;
@@ -260,11 +257,11 @@ fn validate_capabilities(adapter: &str, transport: &TransportProfile) -> Result<
             transport.format
         ));
     }
-    if transport.capabilities["schema_max_length"] == CapabilityStatus::Supported
-        && transport.capabilities["structured_schemas"] != CapabilityStatus::Supported
-    {
+    let schema_supported =
+        transport.capabilities["structured_schemas"] == CapabilityStatus::Supported;
+    if schema_supported != transport.schema_profile.is_some() {
         return Err(format!(
-            "{adapter} / {} declares schema_max_length supported without structured_schemas",
+            "{adapter} / {} must declare schema_profile exactly when structured_schemas is supported",
             transport.format
         ));
     }
@@ -337,6 +334,138 @@ fn check_request_feature(
             adapter.build_body(&request, &transport.provider, &transport.model),
         ),
         CapabilityStatus::NotApplicable => Ok(()),
+    }
+}
+
+/// Every classified schema keyword must reach the wire exactly as the declared
+/// SDK profile classifies it, in both schema modes.
+fn check_schema_keywords(
+    adapter: &impl Adapter,
+    context: &str,
+    transport: &TransportProfile,
+) -> Result<(), String> {
+    let Some(profile) = &transport.schema_profile else {
+        return Ok(());
+    };
+    let profile: SchemaProfile = profile
+        .parse()
+        .map_err(|error| format!("{context}: {error}"))?;
+    let probes: Value =
+        serde_json::from_str(SCHEMA_KEYWORDS).expect("schema keyword probes must be valid JSON");
+    let probes = probes["keywords"]
+        .as_object()
+        .expect("schema keyword probes must contain keywords");
+    let classified: BTreeSet<_> = kinetix_plugin_sdk::schema::classified_keywords().collect();
+    let probed: BTreeSet<_> = probes.keys().map(String::as_str).collect();
+    if classified != probed {
+        return Err(format!(
+            "{context}: schema keyword probes out of sync with SDK classification"
+        ));
+    }
+
+    for (mode, capability_mode) in [
+        (SchemaMode::Strict, "strict"),
+        (SchemaMode::Compatible, "permissive"),
+    ] {
+        let mut provider = transport.provider.clone();
+        provider["capability_mode"] = json!(capability_mode);
+        for (keyword, probe) in probes {
+            let disposition = profile
+                .disposition(keyword, mode)
+                .expect("probed keyword is classified");
+            let label = format!(
+                "{context} schema keyword '{keyword}' ({capability_mode}, {disposition:?})"
+            );
+            let mut request = parse_fixture(REQUEST_SCHEMA);
+            request["tools"][0]["parameters"] = probe_parameters(probe);
+            let result = adapter.build_body(&request, &provider, &transport.model);
+            match disposition {
+                Disposition::Reject => {
+                    if result.is_ok() {
+                        return Err(format!("{label} was accepted but must be rejected"));
+                    }
+                }
+                Disposition::Normalize => {
+                    let normalized = probe
+                        .get("normalized")
+                        .ok_or_else(|| format!("{label}: probe declares no normalized shape"))?;
+                    if probe["lossy"].as_bool() == Some(true) && mode == SchemaMode::Strict {
+                        if result.is_ok() {
+                            return Err(format!(
+                                "{label} is lossy and must be refused in strict mode"
+                            ));
+                        }
+                        continue;
+                    }
+                    let body = result.map_err(|error| format!("{label} failed: {error}"))?;
+                    let wire = find_probe_schema(&body)
+                        .ok_or_else(|| format!("{label}: probe schema missing from wire body"))?;
+                    let got = &wire["properties"]["probe"];
+                    if got != normalized {
+                        return Err(format!(
+                            "{label} normalized to {got}, expected {normalized}"
+                        ));
+                    }
+                }
+                _ => {
+                    let body = result.map_err(|error| format!("{label} failed: {error}"))?;
+                    let wire = find_probe_schema(&body)
+                        .ok_or_else(|| format!("{label}: probe schema missing from wire body"))?;
+                    let parameters = probe_parameters(probe);
+                    let sent = probe_keyword(probe, keyword, &parameters);
+                    let got = probe_keyword(probe, keyword, wire);
+                    match disposition {
+                        Disposition::Preserve if got != sent => {
+                            return Err(format!(
+                                "{label} was not preserved: sent {sent:?}, wire {got:?}"
+                            ))
+                        }
+                        Disposition::Consume if got.is_some() => {
+                            return Err(format!("{label} survived on the wire: {got:?}"))
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn probe_parameters(probe: &Value) -> Value {
+    let mut root = json!({
+        "type": "object",
+        "properties": {"probe": probe["schema"]},
+        "required": ["probe"],
+    });
+    for (key, value) in probe["root"].as_object().into_iter().flatten() {
+        root[key] = value.clone();
+    }
+    root
+}
+
+/// The parameters object the adapter emitted for the probe tool, wherever the
+/// wire format nests it.
+fn find_probe_schema(wire: &Value) -> Option<&Value> {
+    match wire {
+        Value::Object(map) => {
+            if map
+                .get("properties")
+                .is_some_and(|p| p.get("probe").is_some())
+            {
+                return Some(wire);
+            }
+            map.values().find_map(find_probe_schema)
+        }
+        Value::Array(items) => items.iter().find_map(find_probe_schema),
+        _ => None,
+    }
+}
+
+fn probe_keyword<'a>(probe: &Value, keyword: &str, parameters: &'a Value) -> Option<&'a Value> {
+    match probe["at"].as_str().unwrap_or("probe") {
+        "root" => parameters.get(keyword),
+        _ => parameters["properties"]["probe"].get(keyword),
     }
 }
 
@@ -1757,7 +1886,6 @@ mod tests {
             "reasoning_controls",
             "reasoning_output",
             "structured_schemas",
-            "schema_max_length",
             "stop_reasons",
             "usage_extraction",
             "error_classification",

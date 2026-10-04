@@ -261,19 +261,6 @@ fn provider_is_strict(provider: &Value) -> bool {
     provider.get("capability_mode").and_then(Value::as_str) == Some("strict")
 }
 
-// Legacy constraint regressions. Production policy lives in sdk::schema.
-#[cfg(test)]
-const LEGACY_CONSTRAINT_FIXTURES: &[&str] = &[
-    "minLength",
-    "maxLength",
-    "exclusiveMinimum",
-    "exclusiveMaximum",
-    "minItems",
-    "maxItems",
-    "format",
-    "multipleOf",
-];
-
 fn schema_mode(provider: &Value) -> Result<SchemaMode, AdapterError> {
     let value = match provider.get("capability_mode") {
         None => "compatible",
@@ -2204,60 +2191,6 @@ mod tests {
         assert!(!out.contains("maxLength"));
         assert!(out.contains("Query to execute"));
         assert!(out.contains("nested"));
-    }
-
-    fn droppable_fixture(keyword: &str) -> Value {
-        let value = match keyword {
-            "minLength" | "maxLength" | "minItems" | "maxItems" => json!(3),
-            "exclusiveMinimum" | "exclusiveMaximum" | "multipleOf" => json!(2),
-            "format" => json!("uri"),
-            other => panic!("unexpected keyword {other}"),
-        };
-        let mut property = json!({ "type": "string" });
-        property
-            .as_object_mut()
-            .unwrap()
-            .insert(keyword.to_string(), value);
-        json!({
-            "type": "object",
-            "properties": {
-                "outer": {
-                    "type": "array",
-                    "items": { "type": "object", "properties": { "value": property } }
-                }
-            }
-        })
-    }
-
-    #[test]
-    fn permissive_drops_known_unsupported_schema_constraints() {
-        for keyword in LEGACY_CONSTRAINT_FIXTURES {
-            let schema = droppable_fixture(keyword);
-            let got =
-                sanitize_schema_with_policy(&schema, "tool 'fixture'", SchemaPolicy::Permissive)
-                    .unwrap();
-            let value = got
-                .pointer("/properties/outer/items/properties/value")
-                .unwrap();
-            assert!(value.get(*keyword).is_none(), "{keyword} not dropped");
-            assert_eq!(value["type"], "string");
-        }
-    }
-
-    #[test]
-    fn strict_rejects_known_unsupported_schema_constraints_with_path() {
-        for keyword in LEGACY_CONSTRAINT_FIXTURES {
-            let schema = droppable_fixture(keyword);
-            let error = sanitize_schema(&schema, "tool 'fixture'").unwrap_err();
-            assert_eq!(error.code, "bad_request");
-            assert!(
-                error.message.contains(&format!(
-                    "tool 'fixture'.properties.outer.items.properties.value.{keyword}"
-                )),
-                "{}",
-                error.message
-            );
-        }
     }
 
     #[test]

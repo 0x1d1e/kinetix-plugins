@@ -1,0 +1,17 @@
+[package]
+name = "kinetix-credential-conformance"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[features]
+# Runs the compiled plugin component under wasmtime. Off by default so the
+# workspace still checks for wasm32.
+runtime = ["dep:kinetix-plugin-component-runtime-conformance"]
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+kinetix-plugin-sdk = { path = "../sdk" }
+kinetix-plugin-component-runtime-conformance = { path = "../component-runtime-conformance", features = ["runtime"], optional = true }

@@ -9,7 +9,7 @@ mod transform;
 mod validate;
 mod walk;
 
-pub use policy::{SchemaMode, SchemaProfile};
+pub use policy::{classified_keywords, Disposition, SchemaMode, SchemaProfile};
 use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
