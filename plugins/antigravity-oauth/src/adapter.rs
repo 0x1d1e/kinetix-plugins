@@ -2577,7 +2577,7 @@ mod tests {
     #[test]
     fn antigravity_thinking_tool_result_next_message_continuation() {
         let request: Value = serde_json::from_str(include_str!(
-            "../../../wit/fixtures/plugin-request/v1/antigravity-tool-result-multimodal.json"
+            "../../../wit/fixtures/plugin-adapter/v1/requests/antigravity-tool-result-multimodal.json"
         ))
         .unwrap();
         let body: Value = serde_json::from_str(
