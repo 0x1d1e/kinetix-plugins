@@ -13,3 +13,6 @@ crate-type = ["cdylib"]
 kinetix-plugin-sdk = { path = "../../sdk" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[dev-dependencies]
+kinetix-credential-conformance = { path = "../../credential-conformance", features = ["runtime"] }

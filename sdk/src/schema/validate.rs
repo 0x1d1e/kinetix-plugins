@@ -1,4 +1,4 @@
-use super::{error, profiles::feature, walk, SchemaError, SchemaProfile};
+use super::{error, profiles::feature, walk, Disposition, SchemaError, SchemaProfile};
 use serde_json::{Map, Value};
 
 pub(super) fn node(
@@ -104,7 +104,9 @@ pub(super) fn validate(schema: &Value, profile: SchemaProfile) -> Result<(), Sch
         };
         node(map, path, true)?;
         for key in map.keys() {
-            if feature(key).is_some_and(|feature| !profile.policy().supports(feature)) {
+            if feature(key)
+                .is_some_and(|feature| profile.policy().declared(feature) != Disposition::Preserve)
+            {
                 return Err(error(
                     &format!("{path}.{key}"),
                     "unsupported keyword survived translation",

@@ -21,7 +21,17 @@ Plugins implement provider mechanisms: authorization steps, credential resolutio
 
 Kinetix core owns scheduling, observation and credential persistence, health interpretation, retry/fallback, concurrency, cache affinity, and target selection. `host-storage` holds plugin-private state; core persists account health, model inventory, and credentials. `health-observation` and `quota-snapshot` are evidence, and `routing-fact` informs core policy without selecting a target. Adapter inputs describe the provider/model already selected by core. API v1 and v2 retain their existing host-import contracts. API v3 adapters have no host imports; core supplies reserved `_kinetix` context in `provider-json` (account ID, host time, and a non-secret project ID when available) rather than letting adapters read storage or a clock.
 
-`sdk/tests/policy_boundary.rs` guards versioned WIT operations and import contracts. `scripts/test_adapter_component_runtime.sh` invokes the compiled Antigravity v3 adapter with every host import set to trap. Provider conformance tests live in `adapter-conformance/`.
+`sdk/tests/policy_boundary.rs` guards versioned WIT operations and import contracts. `scripts/test_adapter_component_runtime.sh` invokes the compiled Antigravity v3 adapter with every host import set to trap. Provider conformance tests live in `adapter-conformance/`: each adapter plugin ships an `adapter-conformance.json` (schema_version 2) and a crate test feeds it to `kinetix_adapter_conformance::check`, which drives the shared canonical-request fixtures through `build_body` and checks the exact provider wire. `scripts/validate_conformance.py` derives each plugin's classes from `plugin.toml`: declaring `provider_adapters` makes the profile and runner test mandatory; plugins without an adapter are covered through the host adapter their manifest selects.
+
+Every shipped adapter implementation - core or plugin-owned - must have executable canonical-intent -> exact-wire conformance evidence. Plugins without adapters are covered through the host adapter they select, not fake adapter tests. The same capability-scoped rule applies to the other plugin entrypoints, and each suite drives the compiled component under wasmtime (`component-runtime-conformance/`) against a scripted host that traps on any unscripted import:
+
+| Manifest declares | Profile (plugin dir) | Runner | Shared fixtures |
+| --- | --- | --- | --- |
+| `provider_adapters` | `adapter-conformance.json` | `kinetix_adapter_conformance::check` | `wit/fixtures/plugin-adapter` |
+| `credential_strategies` | `credential-conformance.json` | `kinetix_credential_conformance::check` | `wit/fixtures/credential-strategy` (refresh, rotation, leases, failure classification) |
+| `account_model_sources` | `discovery-conformance.json` | `kinetix_discovery_conformance::check` | `wit/fixtures/model-discovery` (account ownership, endpoint, credential attachment, failure classification, exact `discovered-model` output) |
+
+Provider catalog cases (a recorded upstream response -> exact `discovered-model[]`) live in the plugin's own profile. `auth_flows` and the legacy `model_sources` interface have no shared suite yet.
 
 ## Session-aware adapter APIs v2 and v3
 
@@ -39,6 +49,8 @@ Protocol translation belongs to plugins. Core retains the canonical client schem
 use kinetix_plugin_sdk::schema::{self, SchemaMode, SchemaProfile};
 let parameters = schema::translate_tool_parameters(&parameters, SchemaProfile::Antigravity, SchemaMode::Compatible)?;
 ```
+
+Each profile classifies every keyword group as `Disposition::Preserve` (unchanged on the wire), `Normalize` (rewritten into an accepted form), `Consume` (removed in `Compatible`, rejected in `Strict` unless it is a non-validating annotation) or `Reject`. The classification is one exhaustive match per profile in `sdk/src/schema/profiles/mod.rs`; adapters never match keywords themselves. `SchemaProfile::disposition(keyword, mode)` exposes it. An adapter's conformance transport declares its `schema_profile`, and the runner probes every classified keyword (`wit/fixtures/plugin-adapter/v1/schema-keywords.json`) in both modes to confirm the wire matches. `sdk/tests/schema_dispositions.rs` does the same against the SDK alone.
 
 `Strict` preserves or translates losslessly, otherwise rejects. `Compatible` allows the profile's lossy transformations. `permissive` parses as a backwards-compatible alias. This policy is independent of an upstream `strict: true` tool flag.
 

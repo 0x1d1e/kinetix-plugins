@@ -1,9 +1,10 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "adapter": "antigravity",
   "transports": [
     {
       "format": "antigravity",
+      "schema_profile": "antigravity",
       "provider": {
         "capability_mode": "permissive",
         "extra_headers": "{\"x-antigravity-project\":\"conformance-project\"}"
@@ -21,7 +22,6 @@
         "reasoning_controls": "supported",
         "reasoning_output": "supported",
         "structured_schemas": "supported",
-        "schema_max_length": "not_applicable",
         "stop_reasons": "supported",
         "usage_extraction": "supported",
         "error_classification": "supported",

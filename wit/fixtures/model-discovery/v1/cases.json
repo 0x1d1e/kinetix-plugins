@@ -1,0 +1,429 @@
+{
+  "schema_version": 1,
+  "now_unix_millis": 1767225600000,
+  "secret": "conformance-secret",
+  "defaults": {
+    "base_url": "https://models.example.test/v1",
+    "models_path": "/models",
+    "derived_url": "https://models.example.test/v1/models"
+  },
+  "cases": [
+    {
+      "id": "foreign-account-is-rejected",
+      "http": [],
+      "expect": {
+        "error": {
+          "retryable": false,
+          "code": "invalid_configuration"
+        },
+        "requests": 0
+      },
+      "provider_id": "requested-provider",
+      "account_provider_id": "other-provider"
+    },
+    {
+      "id": "request-targets-the-models-endpoint",
+      "http": [
+        "$baseline"
+      ],
+      "expect": {
+        "models": "baseline",
+        "requests": 1
+      }
+    },
+    {
+      "id": "derived-endpoint-joins-host-inputs",
+      "http": [
+        "$baseline"
+      ],
+      "expect": {
+        "models": "baseline",
+        "requests": 1,
+        "url": "https://models.example.test/api/catalog?page=1"
+      },
+      "when": {
+        "endpoint": [
+          "derived"
+        ]
+      },
+      "base_url": "https://models.example.test/api/",
+      "models_path": "/catalog?page=1"
+    },
+    {
+      "id": "derived-endpoint-defaults-blank-inputs",
+      "http": [
+        "$baseline"
+      ],
+      "expect": {
+        "models": "baseline",
+        "requests": 1,
+        "url": "$default"
+      },
+      "when": {
+        "endpoint": [
+          "derived"
+        ]
+      },
+      "base_url": "",
+      "models_path": ""
+    },
+    {
+      "id": "fixed-endpoint-ignores-host-inputs",
+      "http": [
+        "$baseline"
+      ],
+      "expect": {
+        "models": "baseline",
+        "requests": 1
+      },
+      "when": {
+        "endpoint": [
+          "fixed"
+        ]
+      },
+      "base_url": "https://models.example.test/api/",
+      "models_path": "/catalog?page=1"
+    },
+    {
+      "id": "credential-is-attached-to-the-request",
+      "http": [
+        "$baseline"
+      ],
+      "expect": {
+        "models": "baseline",
+        "requests": 1
+      }
+    },
+    {
+      "id": "secret-never-appears-in-url-or-errors",
+      "http": [
+        "$baseline"
+      ],
+      "expect": {
+        "models": "baseline",
+        "requests": 1
+      },
+      "secret": "s3cr3t/with?url&chars=1"
+    },
+    {
+      "id": "unreadable-credential-is-a-terminal-failure",
+      "http": [],
+      "expect": {
+        "error": {
+          "retryable": false
+        },
+        "requests": 0
+      },
+      "when": {
+        "credential": [
+          "api_key",
+          "oauth"
+        ]
+      },
+      "credential_read": "fails"
+    },
+    {
+      "id": "empty-api-key-is-credential-expired",
+      "http": [],
+      "expect": {
+        "error": {
+          "retryable": false,
+          "code": "credential_expired"
+        },
+        "requests": 0
+      },
+      "when": {
+        "credential": [
+          "api_key"
+        ]
+      },
+      "secret": ""
+    },
+    {
+      "id": "truncated-body-is-retryable-unavailable",
+      "http": [
+        {
+          "status": 200,
+          "json": {},
+          "truncated": true
+        }
+      ],
+      "expect": {
+        "error": {
+          "retryable": true,
+          "code": "upstream_unavailable"
+        },
+        "requests": 1
+      }
+    },
+    {
+      "id": "http-401-is-credential-expired",
+      "http": [
+        {
+          "status": 401,
+          "json": {
+            "error": "unauthorized"
+          }
+        }
+      ],
+      "expect": {
+        "error": {
+          "retryable": false,
+          "code": "credential_expired"
+        },
+        "requests": 1
+      }
+    },
+    {
+      "id": "http-403-is-credential-expired",
+      "http": [
+        {
+          "status": 403,
+          "json": {
+            "error": "forbidden"
+          }
+        }
+      ],
+      "expect": {
+        "error": {
+          "retryable": false,
+          "code": "credential_expired"
+        },
+        "requests": 1
+      }
+    },
+    {
+      "id": "http-429-is-rate-limited",
+      "http": [
+        {
+          "status": 429,
+          "json": {
+            "error": "slow down"
+          }
+        }
+      ],
+      "expect": {
+        "error": {
+          "retryable": true,
+          "code": "rate_limited"
+        },
+        "requests": 1
+      }
+    },
+    {
+      "id": "http-500-is-retryable-unavailable",
+      "http": [
+        {
+          "status": 500,
+          "text": "boom"
+        }
+      ],
+      "expect": {
+        "error": {
+          "retryable": true,
+          "code": "upstream_unavailable"
+        },
+        "requests": 1
+      }
+    },
+    {
+      "id": "http-502-is-retryable-unavailable",
+      "http": [
+        {
+          "status": 502,
+          "text": "bad gateway"
+        }
+      ],
+      "expect": {
+        "error": {
+          "retryable": true,
+          "code": "upstream_unavailable"
+        },
+        "requests": 1
+      }
+    },
+    {
+      "id": "http-503-is-retryable-unavailable",
+      "http": [
+        {
+          "status": 503,
+          "json": {}
+        }
+      ],
+      "expect": {
+        "error": {
+          "retryable": true,
+          "code": "upstream_unavailable"
+        },
+        "requests": 1
+      }
+    },
+    {
+      "id": "server-error-with-binary-body-is-still-retryable",
+      "http": [
+        {
+          "status": 503,
+          "hex": "fffe00"
+        }
+      ],
+      "expect": {
+        "error": {
+          "retryable": true,
+          "code": "upstream_unavailable"
+        },
+        "requests": 1
+      }
+    },
+    {
+      "id": "auth-error-with-binary-body-is-still-credential-expired",
+      "http": [
+        {
+          "status": 401,
+          "hex": "fffe00"
+        }
+      ],
+      "expect": {
+        "error": {
+          "retryable": false,
+          "code": "credential_expired"
+        },
+        "requests": 1
+      }
+    },
+    {
+      "id": "http-404-is-protocol-error",
+      "http": [
+        {
+          "status": 404,
+          "text": "no such path"
+        }
+      ],
+      "expect": {
+        "error": {
+          "retryable": false,
+          "code": "protocol_error"
+        },
+        "requests": 1
+      }
+    },
+    {
+      "id": "http-400-is-protocol-error",
+      "http": [
+        {
+          "status": 400,
+          "json": {
+            "error": "bad request"
+          }
+        }
+      ],
+      "expect": {
+        "error": {
+          "retryable": false,
+          "code": "protocol_error"
+        },
+        "requests": 1
+      }
+    },
+    {
+      "id": "invalid-json-is-protocol-error",
+      "http": [
+        {
+          "status": 200,
+          "text": "{not json"
+        }
+      ],
+      "expect": {
+        "error": {
+          "retryable": false,
+          "code": "protocol_error"
+        },
+        "requests": 1
+      }
+    },
+    {
+      "id": "non-utf8-success-is-protocol-error",
+      "http": [
+        {
+          "status": 200,
+          "hex": "fffe00"
+        }
+      ],
+      "expect": {
+        "error": {
+          "retryable": false,
+          "code": "protocol_error"
+        },
+        "requests": 1
+      }
+    },
+    {
+      "id": "empty-body-is-protocol-error",
+      "http": [
+        {
+          "status": 200,
+          "text": ""
+        }
+      ],
+      "expect": {
+        "error": {
+          "retryable": false,
+          "code": "protocol_error"
+        },
+        "requests": 1
+      }
+    },
+    {
+      "id": "catalog-with-no-usable-models-fails-explicitly",
+      "http": [
+        "$empty"
+      ],
+      "expect": {
+        "error": {
+          "retryable": false,
+          "code": "protocol_error"
+        },
+        "requests": 1
+      }
+    },
+    {
+      "id": "retryable-transport-failure-keeps-code-and-retry-after",
+      "http": [
+        {
+          "failure": {
+            "code": "timeout",
+            "message": "timed out",
+            "retryable": true,
+            "retry_after": 7
+          }
+        }
+      ],
+      "expect": {
+        "error": {
+          "retryable": true,
+          "code": "timeout",
+          "retry_after": 7
+        },
+        "requests": 1
+      }
+    },
+    {
+      "id": "terminal-transport-failure-stays-terminal",
+      "http": [
+        {
+          "failure": {
+            "code": "policy_denied",
+            "message": "host policy refused the request",
+            "retryable": false
+          }
+        }
+      ],
+      "expect": {
+        "error": {
+          "retryable": false,
+          "code": "policy_denied"
+        },
+        "requests": 1
+      }
+    }
+  ]
+}
