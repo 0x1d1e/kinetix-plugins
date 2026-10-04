@@ -1,0 +1,286 @@
+{
+  "schema_version": 1,
+  "source": "b-ai-models",
+  "provider_id": "b-ai",
+  "account_id": "conformance-account",
+  "request": {
+    "method": "GET",
+    "endpoint": {
+      "kind": "derived",
+      "default_url": "https://api.b.ai/v1/models"
+    }
+  },
+  "credential": {
+    "kind": "host_injected"
+  },
+  "empty_response": {
+    "status": 200,
+    "json": {
+      "object": "list",
+      "data": []
+    }
+  },
+  "cases": [
+    {
+      "id": "baseline",
+      "http": [
+        {
+          "status": 200,
+          "json": {
+            "object": "list",
+            "data": [
+              {
+                "id": "DeepSeek-V4.1-Flash",
+                "object": "model"
+              }
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "models": [
+          {
+            "id": "DeepSeek-V4.1-Flash",
+            "display_name": "DeepSeek V4.1 Flash",
+            "context_window": 1000000,
+            "max_output_tokens": 384000,
+            "capabilities": {
+              "schema_version": 1,
+              "transport": {
+                "format": "openai"
+              },
+              "reasoning": {
+                "supported": true,
+                "mode": "level",
+                "levels": [
+                  "low",
+                  "high",
+                  "max"
+                ],
+                "default": "high",
+                "can_disable": true
+              },
+              "tools": {
+                "supported": true
+              },
+              "vision": {
+                "input": true
+              },
+              "structured_output": {
+                "supported": true
+              }
+            },
+            "raw_metadata": {
+              "id": "DeepSeek-V4.1-Flash",
+              "object": "model"
+            }
+          }
+        ],
+        "requests": 1
+      }
+    },
+    {
+      "id": "live-catalog-is-enriched-by-exact-model-id-and-sorted",
+      "http": [
+        {
+          "status": 200,
+          "json": {
+            "object": "list",
+            "data": [
+              {
+                "id": "zz-future-model",
+                "object": "model",
+                "owned_by": "b.ai"
+              },
+              {
+                "id": "DeepSeek-V4-Flash-Vision-Exp",
+                "object": "model"
+              },
+              {
+                "id": "DeepSeek-V4-Flash",
+                "object": "model",
+                "name": "Live Name",
+                "context_length": 128000,
+                "max_output_tokens": 4096
+              },
+              {
+                "id": "deepseek-v4.1-flash",
+                "object": "model"
+              },
+              {
+                "id": "  DeepSeek-V4.1-Flash  ",
+                "object": "model"
+              },
+              {
+                "object": "model"
+              },
+              {
+                "id": "   ",
+                "object": "model"
+              },
+              {
+                "id": 42
+              }
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "models": [
+          {
+            "id": "DeepSeek-V4-Flash",
+            "display_name": "Live Name",
+            "context_window": 128000,
+            "max_output_tokens": 4096,
+            "capabilities": {
+              "schema_version": 1,
+              "transport": {
+                "format": "openai"
+              },
+              "reasoning": {
+                "supported": true
+              },
+              "tools": {
+                "supported": true
+              },
+              "vision": {
+                "input": false
+              }
+            },
+            "raw_metadata": {
+              "id": "DeepSeek-V4-Flash",
+              "object": "model",
+              "name": "Live Name",
+              "context_length": 128000,
+              "max_output_tokens": 4096
+            }
+          },
+          {
+            "id": "DeepSeek-V4-Flash-Vision-Exp",
+            "display_name": "DeepSeek V4 Flash Vision Exp",
+            "context_window": 1000000,
+            "max_output_tokens": 384000,
+            "capabilities": {
+              "schema_version": 1,
+              "transport": {
+                "format": "openai"
+              },
+              "reasoning": {
+                "supported": true,
+                "mode": "level",
+                "levels": [
+                  "low",
+                  "high",
+                  "max"
+                ],
+                "default": "high",
+                "can_disable": true
+              },
+              "tools": {
+                "supported": true
+              },
+              "vision": {
+                "input": true
+              },
+              "structured_output": {
+                "supported": true
+              }
+            },
+            "raw_metadata": {
+              "id": "DeepSeek-V4-Flash-Vision-Exp",
+              "object": "model"
+            }
+          },
+          {
+            "id": "DeepSeek-V4.1-Flash",
+            "display_name": "DeepSeek V4.1 Flash",
+            "context_window": 1000000,
+            "max_output_tokens": 384000,
+            "capabilities": {
+              "schema_version": 1,
+              "transport": {
+                "format": "openai"
+              },
+              "reasoning": {
+                "supported": true,
+                "mode": "level",
+                "levels": [
+                  "low",
+                  "high",
+                  "max"
+                ],
+                "default": "high",
+                "can_disable": true
+              },
+              "tools": {
+                "supported": true
+              },
+              "vision": {
+                "input": true
+              },
+              "structured_output": {
+                "supported": true
+              }
+            },
+            "raw_metadata": {
+              "id": "  DeepSeek-V4.1-Flash  ",
+              "object": "model"
+            }
+          },
+          {
+            "id": "deepseek-v4.1-flash",
+            "display_name": "deepseek-v4.1-flash",
+            "context_window": null,
+            "max_output_tokens": null,
+            "capabilities": {
+              "schema_version": 1,
+              "transport": {
+                "format": "openai"
+              }
+            },
+            "raw_metadata": {
+              "id": "deepseek-v4.1-flash",
+              "object": "model"
+            }
+          },
+          {
+            "id": "zz-future-model",
+            "display_name": "zz-future-model",
+            "context_window": null,
+            "max_output_tokens": null,
+            "capabilities": {
+              "schema_version": 1,
+              "transport": {
+                "format": "openai"
+              }
+            },
+            "raw_metadata": {
+              "id": "zz-future-model",
+              "object": "model",
+              "owned_by": "b.ai"
+            }
+          }
+        ],
+        "requests": 1
+      }
+    },
+    {
+      "id": "response-without-data-array-is-explicit-failure",
+      "http": [
+        {
+          "status": 200,
+          "json": {
+            "object": "list"
+          }
+        }
+      ],
+      "expect": {
+        "error": {
+          "code": "protocol_error",
+          "retryable": false
+        },
+        "requests": 1
+      }
+    }
+  ]
+}

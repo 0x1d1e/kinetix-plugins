@@ -1,0 +1,250 @@
+{
+  "schema_version": 1,
+  "source": "ai-studio-models",
+  "provider_id": "google-ai-studio",
+  "account_id": "conformance-account",
+  "request": {
+    "method": "GET",
+    "endpoint": {
+      "kind": "derived",
+      "default_url": "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000"
+    }
+  },
+  "credential": {
+    "kind": "api_key",
+    "plaintext_template": "$secret",
+    "header": {
+      "name": "x-goog-api-key",
+      "value": "$secret"
+    }
+  },
+  "empty_response": {
+    "status": 200,
+    "json": {
+      "models": [
+        {
+          "name": "models/text-embedding-004",
+          "supportedGenerationMethods": [
+            "embedContent"
+          ]
+        }
+      ]
+    }
+  },
+  "cases": [
+    {
+      "id": "baseline",
+      "http": [
+        {
+          "status": 200,
+          "json": {
+            "models": [
+              {
+                "name": "models/gemini-3.8-flash",
+                "displayName": "Gemini 3.8 Flash",
+                "inputTokenLimit": 1048576,
+                "outputTokenLimit": 65536,
+                "supportedGenerationMethods": [
+                  "generateContent",
+                  "countTokens"
+                ],
+                "thinking": true
+              }
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "models": [
+          {
+            "id": "gemini-3.8-flash",
+            "display_name": "Gemini 3.8 Flash",
+            "context_window": 1048576,
+            "max_output_tokens": 65536,
+            "capabilities": {
+              "schema_version": 1,
+              "transport": {
+                "format": "gemini"
+              },
+              "reasoning": {
+                "supported": true
+              }
+            },
+            "raw_metadata": {
+              "name": "models/gemini-3.8-flash",
+              "displayName": "Gemini 3.8 Flash",
+              "inputTokenLimit": 1048576,
+              "outputTokenLimit": 65536,
+              "supportedGenerationMethods": [
+                "generateContent",
+                "countTokens"
+              ],
+              "thinking": true
+            }
+          }
+        ],
+        "requests": 1
+      }
+    },
+    {
+      "id": "catalog-keeps-generate-content-models-sorted-and-normalized",
+      "http": [
+        {
+          "status": 200,
+          "json": {
+            "models": [
+              {
+                "name": "models/gemini-zeta",
+                "displayName": "Zeta",
+                "inputTokenLimit": 32000,
+                "outputTokenLimit": 8192,
+                "supportedGenerationMethods": [
+                  "generateContent"
+                ],
+                "thinking": false,
+                "futureField": {
+                  "nested": [
+                    1,
+                    2
+                  ]
+                }
+              },
+              {
+                "name": "models/text-embedding-004",
+                "displayName": "Embedding",
+                "supportedGenerationMethods": [
+                  "embedContent"
+                ]
+              },
+              {
+                "name": "models/gemini-alpha",
+                "supportedGenerationMethods": [
+                  "generateContent"
+                ]
+              },
+              {
+                "name": "models/no-methods",
+                "displayName": "No methods"
+              },
+              {
+                "displayName": "nameless",
+                "supportedGenerationMethods": [
+                  "generateContent"
+                ]
+              },
+              {
+                "name": "models/",
+                "supportedGenerationMethods": [
+                  "generateContent"
+                ]
+              },
+              {
+                "name": "bare-id",
+                "displayName": "",
+                "supportedGenerationMethods": [
+                  "countTokens",
+                  "generateContent"
+                ],
+                "thinking": true
+              }
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "models": [
+          {
+            "id": "bare-id",
+            "display_name": "bare-id",
+            "context_window": null,
+            "max_output_tokens": null,
+            "capabilities": {
+              "schema_version": 1,
+              "transport": {
+                "format": "gemini"
+              },
+              "reasoning": {
+                "supported": true
+              }
+            },
+            "raw_metadata": {
+              "name": "bare-id",
+              "displayName": "",
+              "supportedGenerationMethods": [
+                "countTokens",
+                "generateContent"
+              ],
+              "thinking": true
+            }
+          },
+          {
+            "id": "gemini-alpha",
+            "display_name": "gemini-alpha",
+            "context_window": null,
+            "max_output_tokens": null,
+            "capabilities": {
+              "schema_version": 1,
+              "transport": {
+                "format": "gemini"
+              }
+            },
+            "raw_metadata": {
+              "name": "models/gemini-alpha",
+              "supportedGenerationMethods": [
+                "generateContent"
+              ]
+            }
+          },
+          {
+            "id": "gemini-zeta",
+            "display_name": "Zeta",
+            "context_window": 32000,
+            "max_output_tokens": 8192,
+            "capabilities": {
+              "schema_version": 1,
+              "transport": {
+                "format": "gemini"
+              },
+              "reasoning": {
+                "supported": false
+              }
+            },
+            "raw_metadata": {
+              "name": "models/gemini-zeta",
+              "displayName": "Zeta",
+              "inputTokenLimit": 32000,
+              "outputTokenLimit": 8192,
+              "supportedGenerationMethods": [
+                "generateContent"
+              ],
+              "thinking": false,
+              "futureField": {
+                "nested": [
+                  1,
+                  2
+                ]
+              }
+            }
+          }
+        ],
+        "requests": 1
+      }
+    },
+    {
+      "id": "catalog-without-models-array-is-explicit-failure",
+      "http": [
+        {
+          "status": 200,
+          "json": {}
+        }
+      ],
+      "expect": {
+        "error": {
+          "code": "protocol_error",
+          "retryable": false
+        },
+        "requests": 1
+      }
+    }
+  ]
+}

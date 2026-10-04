@@ -23,6 +23,16 @@ Kinetix core owns scheduling, observation and credential persistence, health int
 
 `sdk/tests/policy_boundary.rs` guards versioned WIT operations and import contracts. `scripts/test_adapter_component_runtime.sh` invokes the compiled Antigravity v3 adapter with every host import set to trap. Provider conformance tests live in `adapter-conformance/`: each adapter plugin ships an `adapter-conformance.json` (schema_version 2) and a crate test feeds it to `kinetix_adapter_conformance::check`, which drives the shared canonical-request fixtures through `build_body` and checks the exact provider wire. `scripts/validate_conformance.py` derives each plugin's classes from `plugin.toml`: declaring `provider_adapters` makes the profile and runner test mandatory; plugins without an adapter are covered through the host adapter their manifest selects.
 
+Every shipped adapter implementation - core or plugin-owned - must have executable canonical-intent -> exact-wire conformance evidence. Plugins without adapters are covered through the host adapter they select, not fake adapter tests. The same capability-scoped rule applies to the other plugin entrypoints, and each suite drives the compiled component under wasmtime (`component-runtime-conformance/`) against a scripted host that traps on any unscripted import:
+
+| Manifest declares | Profile (plugin dir) | Runner | Shared fixtures |
+| --- | --- | --- | --- |
+| `provider_adapters` | `adapter-conformance.json` | `kinetix_adapter_conformance::check` | `wit/fixtures/plugin-adapter` |
+| `credential_strategies` | `credential-conformance.json` | `kinetix_credential_conformance::check` | `wit/fixtures/credential-strategy` (refresh, rotation, leases, failure classification) |
+| `account_model_sources` | `discovery-conformance.json` | `kinetix_discovery_conformance::check` | `wit/fixtures/model-discovery` (account ownership, endpoint, credential attachment, failure classification, exact `discovered-model` output) |
+
+Provider catalog cases (a recorded upstream response -> exact `discovered-model[]`) live in the plugin's own profile. `auth_flows` and the legacy `model_sources` interface have no shared suite yet.
+
 ## Session-aware adapter APIs v2 and v3
 
 Keep existing plugins on `plugin_api = "1"` and the `adapter` bindings. Existing session-aware API v2 packages keep `kinetix_plugin_sdk::adapter_v2` (`plugin-adapter-v2` in `kinetix:plugin@2.0.0`) and their host imports. New plugins that need the import-free adapter contract use `kinetix_plugin_sdk::adapter_v3` (`plugin-adapter-v3` in `kinetix:plugin@3.0.0`) and declare `plugin_api = "3"`. API v3 retains the session-aware adapter signatures, removes host imports, and receives reserved `_kinetix` context from core. Hosts can support API v1, v2, and v3 concurrently; older hosts reject API majors they do not support.

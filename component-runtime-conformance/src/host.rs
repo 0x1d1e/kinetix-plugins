@@ -53,6 +53,8 @@ pub struct HostState {
     pub credential: Option<String>,
     pub http: VecDeque<HttpOutcome>,
     pub requests: Vec<HttpRequest>,
+    /// The `credential-ref` of every `host-credential.read`, as JSON.
+    pub credential_reads: Vec<Value>,
 }
 
 pub enum Outcome {
@@ -332,10 +334,15 @@ fn call_host(
             Val::Result(Ok(None))
         }
         ("kinetix:plugin/host-log", "log") => return Ok(None),
-        ("kinetix:plugin/host-credential", "read") => match &state.credential {
-            Some(raw) => Val::Result(Ok(Some(Box::new(Val::String(raw.clone()))))),
-            None => host_failure("credential_unavailable", "no credential".into()),
-        },
+        ("kinetix:plugin/host-credential", "read") => {
+            state.credential_reads.push(val_to_json(
+                params.first().context("credential read without a ref")?,
+            ));
+            match &state.credential {
+                Some(raw) => Val::Result(Ok(Some(Box::new(Val::String(raw.clone()))))),
+                None => host_failure("credential_unavailable", "no credential".into()),
+            }
+        }
         _ => bail!("host capability {interface}#{name} is not available to this conformance suite"),
     }))
 }
@@ -371,4 +378,38 @@ fn host_linker(engine: &Engine, component: &Component) -> Result<Linker<HostStat
         }
     }
     Ok(linker)
+}
+
+/// Build a scripted `host-http` outcome from fixture JSON: either
+/// `{failure: {code, message?, retryable?, retry_after?}}` or
+/// `{status, json | text | hex, truncated?}`.
+pub fn http_outcome(spec: &Value) -> Result<HttpOutcome> {
+    if let Some(failure) = spec.get("failure") {
+        return Ok(HttpOutcome::Failure(WireError {
+            code: failure["code"].as_str().context("failure code")?.into(),
+            message: failure["message"].as_str().unwrap_or("").into(),
+            retryable: failure["retryable"].as_bool().unwrap_or(false),
+            retry_after: failure["retry_after"].as_u64(),
+            reset_at: None,
+        }));
+    }
+    let body = if let Some(json) = spec.get("json") {
+        json.to_string().into_bytes()
+    } else if let Some(text) = spec.get("text") {
+        text.as_str().context("text body")?.as_bytes().to_vec()
+    } else if let Some(hex) = spec.get("hex") {
+        let hex = hex.as_str().context("hex body")?;
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16))
+            .collect::<Result<_, _>>()?
+    } else {
+        Vec::new()
+    };
+    Ok(HttpOutcome::Response(HttpResponse {
+        status: spec["status"].as_u64().context("status")? as u16,
+        headers: Vec::new(),
+        body,
+        truncated: spec["truncated"].as_bool().unwrap_or(false),
+    }))
 }

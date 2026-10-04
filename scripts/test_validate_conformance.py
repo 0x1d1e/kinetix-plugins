@@ -24,6 +24,12 @@ CREDENTIAL_PROFILE = {"schema_version": 1, "strategy": "demo"}
 CREDENTIAL_TEST = f'include_str!("../credential-conformance.json"); {CREDENTIAL.runner}("demo", p);'
 
 
+DISCOVERY = next(suite for suite in SUITES if suite.cls == "discovery")
+DISCOVERY_MANIFEST = '[provides]\naccount_model_sources = ["demo"]\n'
+DISCOVERY_PROFILE = {"schema_version": 1, "source": "demo"}
+DISCOVERY_TEST = f'include_str!("../discovery-conformance.json"); {DISCOVERY.runner}("demo", p);'
+
+
 def plugin(root, name, manifest, profile=None, source=None, profile_name=PROFILE, source_path="src/lib.rs"):
     directory = pathlib.Path(root) / "plugins" / name
     (directory / "src").mkdir(parents=True)
@@ -47,11 +53,19 @@ class ClassificationTests(unittest.TestCase):
             CREDENTIAL_MANIFEST, profile, source, profile_name=CREDENTIAL.profile, source_path=source_path
         )
 
+    def discovery_errors(self, profile=DISCOVERY_PROFILE, source=DISCOVERY_TEST, source_path="tests/discovery.rs"):
+        return self.errors(
+            DISCOVERY_MANIFEST, profile, source, profile_name=DISCOVERY.profile, source_path=source_path
+        )
+
     def test_shipped_plugins_pass(self):
         errors, report = validate(ROOT)
         self.assertEqual(errors, [])
         for name in ("antigravity-oauth", "claude-code-oauth"):
             self.assertIn("credential", report[name])
+        for name in ("ai-studio", "b-ai", "antigravity-oauth"):
+            self.assertIn("discovery", report[name])
+        self.assertNotIn("discovery", report["opencode-free"])
         self.assertIn("adapter", report["antigravity-oauth"])
         self.assertIn("adapter", report["opencode-free"])
         for name in ("ai-studio", "b-ai", "claude-code-oauth"):
@@ -108,6 +122,38 @@ class ClassificationTests(unittest.TestCase):
             (pathlib.Path(root) / "plugins/demo" / CREDENTIAL.profile).write_text("{}")
             errors = validate(pathlib.Path(root))[0]
         self.assertTrue(any("declares no credential_strategies" in e for e in errors))
+
+    def test_account_model_source_without_profile_fails(self):
+        self.assertTrue(any("no discovery-conformance.json" in e for e in self.errors(DISCOVERY_MANIFEST)))
+
+    def test_discovery_profile_in_integration_test_passes(self):
+        self.assertEqual(self.discovery_errors(), [])
+
+    def test_discovery_profile_without_runner_call_fails(self):
+        errors = self.discovery_errors(source='include_str!("../discovery-conformance.json");')
+        self.assertTrue(any(DISCOVERY.runner in e for e in errors))
+
+    def test_discovery_runner_call_must_name_the_profile(self):
+        errors = self.discovery_errors(source=f'{DISCOVERY.runner}("demo", p);')
+        self.assertTrue(any(DISCOVERY.runner in e for e in errors))
+
+    def test_discovery_profile_must_name_the_declared_source(self):
+        errors = self.discovery_errors(profile={**DISCOVERY_PROFILE, "source": "other"})
+        self.assertTrue(any("must be the declared account_model_sources" in e for e in errors))
+
+    def test_stale_discovery_schema_version_fails(self):
+        errors = self.discovery_errors(profile={**DISCOVERY_PROFILE, "schema_version": 2})
+        self.assertTrue(any("schema_version" in e for e in errors))
+
+    def test_discovery_profile_without_account_model_source_fails(self):
+        with tempfile.TemporaryDirectory() as root:
+            plugin(root, "demo", ADAPTER_MANIFEST, GOOD_PROFILE, GOOD_SOURCE)
+            (pathlib.Path(root) / "plugins/demo" / DISCOVERY.profile).write_text("{}")
+            errors = validate(pathlib.Path(root))[0]
+        self.assertTrue(any("declares no account_model_sources" in e for e in errors))
+
+    def test_legacy_model_source_needs_no_discovery_profile(self):
+        self.assertEqual(self.errors('[provides]\nmodel_sources = ["legacy"]\n'), [])
 
     def test_classes_come_from_the_manifest(self):
         provides = {"auth_flows": ["a"], "credential_strategies": ["c"], "account_model_sources": ["m"]}

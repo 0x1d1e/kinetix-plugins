@@ -25,6 +25,7 @@ PLUGIN_OWNED = (
     "wit/fixtures/capability-security",
     "wit/fixtures/credential-strategy",
     "wit/fixtures/kxp",
+    "wit/fixtures/model-discovery",
     "wit/fixtures/plugin-adapter",
     "wit/fixtures/plugin-install",
 )

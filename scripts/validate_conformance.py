@@ -5,8 +5,9 @@ evidence its declared capabilities imply.
     provider_adapters       -> adapter-conformance.json, run by a crate test
     credential_strategies   -> credential-conformance.json, run by a crate test
     host-native wire format -> manifest/host-adapter contract (validate_manifests.py)
+    account_model_sources   -> discovery-conformance.json, run by a crate test
     auth_flows              -> crate unit tests (no shared suite yet)
-    model discovery         -> crate unit tests (no shared suite yet)
+    model_sources (legacy)  -> crate unit tests (no shared suite yet)
 
 "No adapter" is derived from the manifest, never declared. A profile for a
 capability the manifest does not declare is an error, as is a profile that no
@@ -43,6 +44,7 @@ class Suite:
 SUITES = (
     Suite("adapter", "provider_adapters", "adapter-conformance.json", 2, "adapter", "kinetix_adapter_conformance::check"),
     Suite("credential", "credential_strategies", "credential-conformance.json", 1, "strategy", "kinetix_credential_conformance::check"),
+    Suite("discovery", "account_model_sources", "discovery-conformance.json", 1, "source", "kinetix_discovery_conformance::check"),
 )
 PROFILE = SUITES[0].profile
 RUNNER_CALL = SUITES[0].runner
@@ -53,8 +55,8 @@ def classify(manifest: dict) -> set[str]:
     classes = {suite.cls for suite in SUITES if provides.get(suite.provides)}
     if provides.get("auth_flows"):
         classes.add("auth-flow")
-    if provides.get("model_sources") or provides.get("account_model_sources"):
-        classes.add("discovery")
+    if provides.get("model_sources"):
+        classes.add("legacy-model-source")
     for integration in manifest.get("integrations", []):
         wire = integration.get("provider", {}).get("wire_format", "plugin")
         if integration.get("provider") and wire != "plugin":

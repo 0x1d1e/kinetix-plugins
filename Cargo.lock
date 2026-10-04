@@ -517,9 +517,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "kinetix-discovery-conformance"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "kinetix-plugin-component-runtime-conformance",
+ "kinetix-plugin-sdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "kinetix-plugin-ai-studio"
 version = "0.1.3"
 dependencies = [
+ "kinetix-discovery-conformance",
  "kinetix-plugin-sdk",
  "serde",
  "serde_json",
@@ -531,6 +543,7 @@ version = "0.1.19"
 dependencies = [
  "kinetix-adapter-conformance",
  "kinetix-credential-conformance",
+ "kinetix-discovery-conformance",
  "kinetix-plugin-sdk",
  "serde",
  "serde_json",
@@ -540,6 +553,7 @@ dependencies = [
 name = "kinetix-plugin-b-ai"
 version = "0.1.3"
 dependencies = [
+ "kinetix-discovery-conformance",
  "kinetix-plugin-sdk",
  "serde",
  "serde_json",

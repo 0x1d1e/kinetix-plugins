@@ -11,7 +11,7 @@ mod host;
 
 pub use build::build_component;
 pub use host::{
-    account_ref, val_to_json, Guest, HostState, HttpOutcome, HttpRequest, HttpResponse, Outcome,
-    WireError,
+    account_ref, http_outcome, val_to_json, Guest, HostState, HttpOutcome, HttpRequest,
+    HttpResponse, Outcome, WireError,
 };
 pub use wasmtime::component::Val;

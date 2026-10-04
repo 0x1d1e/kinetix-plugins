@@ -1077,8 +1077,16 @@ fn load_model_credential(account: &ModelAccountRef) -> Result<Credential, ModelP
     }
 
     let credential_ref = ModelCredentialRef::Account(account.clone());
-    let imported = model_world::kinetix::plugin::host_credential::read(&credential_ref)
-        .map_err(|e| model_error(&e.code, e.message, e.retryable))?;
+    let imported =
+        model_world::kinetix::plugin::host_credential::read(&credential_ref).map_err(|e| {
+            ModelPluginError {
+                code: e.code,
+                message: e.message,
+                retryable: e.retryable,
+                retry_after: e.retry_after,
+                reset_at: e.reset_at,
+            }
+        })?;
     latest_credential_from_sources(&imported, None)
         .map_err(|e| model_error("invalid_configuration", e, false))
 }
@@ -1583,8 +1591,14 @@ impl model_world::exports::account_model_source::Guest for Component {
             body: b"{}".to_vec(),
             credential: None,
         };
-        let resp = model_world::kinetix::plugin::host_http::send(&req)
-            .map_err(|e| model_error(&e.code, e.message, e.retryable))?;
+        let resp =
+            model_world::kinetix::plugin::host_http::send(&req).map_err(|e| ModelPluginError {
+                code: e.code,
+                message: e.message,
+                retryable: e.retryable,
+                retry_after: e.retry_after,
+                reset_at: e.reset_at,
+            })?;
         if resp.body_truncated {
             return Err(model_error(
                 "upstream_unavailable",
@@ -1592,15 +1606,21 @@ impl model_world::exports::account_model_source::Guest for Component {
                 true,
             ));
         }
-        let text = String::from_utf8(resp.body)
-            .map_err(|_| model_error("protocol_error", "model catalog is not utf-8", false))?;
         if resp.status != 200 {
+            let (code, retryable) = match resp.status {
+                401 | 403 => ("credential_expired", false),
+                429 => ("rate_limited", true),
+                status if status >= 500 => ("upstream_unavailable", true),
+                _ => ("protocol_error", false),
+            };
             return Err(model_error(
-                "upstream_unavailable",
+                code,
                 format!("model catalog returned HTTP {}", resp.status),
-                resp.status >= 500,
+                retryable,
             ));
         }
+        let text = String::from_utf8(resp.body)
+            .map_err(|_| model_error("protocol_error", "model catalog is not utf-8", false))?;
 
         let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
             model_error(
@@ -1609,7 +1629,16 @@ impl model_world::exports::account_model_source::Guest for Component {
                 false,
             )
         })?;
-        parse_model_catalog(&value)
+        let mut models = parse_model_catalog(&value)?;
+        if models.is_empty() {
+            return Err(model_error(
+                "protocol_error",
+                "model catalog contained no usable models",
+                false,
+            ));
+        }
+        models.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(models)
     }
 }
 

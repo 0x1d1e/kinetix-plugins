@@ -1,7 +1,7 @@
 use super::*;
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use kinetix_plugin_component_runtime_conformance::{
-    build_component, Guest, HostState, HttpOutcome, HttpResponse, Outcome, Val, WireError,
+    build_component, http_outcome, Guest, HostState, Outcome, Val, WireError,
 };
 use kinetix_plugin_sdk::oauth::{format_rfc3339_ms, parse_rfc3339_ms};
 use std::path::Path;
@@ -79,37 +79,6 @@ fn render_credential(profile: &Profile, now: u64, spec: &Value) -> Result<(Strin
     ))
 }
 
-fn outcome(spec: &Value) -> Result<HttpOutcome> {
-    if let Some(failure) = spec.get("failure") {
-        return Ok(HttpOutcome::Failure(WireError {
-            code: failure["code"].as_str().context("failure code")?.into(),
-            message: failure["message"].as_str().unwrap_or("").into(),
-            retryable: failure["retryable"].as_bool().unwrap_or(false),
-            retry_after: failure["retry_after"].as_u64(),
-            reset_at: None,
-        }));
-    }
-    let body = if let Some(json) = spec.get("json") {
-        json.to_string().into_bytes()
-    } else if let Some(text) = spec.get("text") {
-        text.as_str().context("text body")?.as_bytes().to_vec()
-    } else if let Some(hex) = spec.get("hex") {
-        let hex = hex.as_str().context("hex body")?;
-        (0..hex.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16))
-            .collect::<Result<_, _>>()?
-    } else {
-        Vec::new()
-    };
-    Ok(HttpOutcome::Response(HttpResponse {
-        status: spec["status"].as_u64().context("status")? as u16,
-        headers: Vec::new(),
-        body,
-        truncated: spec["truncated"].as_bool().unwrap_or(false),
-    }))
-}
-
 fn run_case(component: &Path, profile: &Profile, now: u64, case: &Value) -> Result<()> {
     let mut host = HostState {
         now_ms: now,
@@ -122,7 +91,7 @@ fn run_case(component: &Path, profile: &Profile, now: u64, case: &Value) -> Resu
         imported_expiry = expiry;
     }
     for spec in case["http"].as_array().context("http")? {
-        host.http.push_back(outcome(spec)?);
+        host.http.push_back(http_outcome(spec)?);
     }
     let mut guest = Guest::instantiate(component, host)?;
     for (index, step) in case["steps"]
