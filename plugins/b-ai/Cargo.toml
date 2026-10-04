@@ -1,6 +1,6 @@
 [package]
 name = "kinetix-plugin-b-ai"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "Kinetix plugin: B.AI setup, live model discovery, and provider metadata."
 license = "MIT"
