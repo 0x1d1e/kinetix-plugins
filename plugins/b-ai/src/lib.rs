@@ -358,6 +358,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn thinking_contract_pins_discovered_reasoning_capabilities() {
+        kinetix_adapter_conformance::check_model_source_contract(
+            include_str!("../thinking-contract.json"),
+            |item| {
+                let models = parse_model_list(&serde_json::json!({ "data": [item] }))
+                    .map_err(|error| error.message)?;
+                models
+                    .into_iter()
+                    .next()
+                    .and_then(|model| model.capabilities_json)
+                    .ok_or_else(|| "model was not discovered".to_string())
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn account_discovery_uses_live_bai_models_endpoint_with_account_credential() {
         TEST_RESPONSE.with(|slot| {
             *slot.borrow_mut() = Some(ModelHttpResponse {

@@ -1520,6 +1520,18 @@ mod tests {
     }
 
     #[test]
+    fn thinking_translation_contract() {
+        kinetix_adapter_conformance::check_thinking_contract(
+            &ConformanceAdapter,
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/thinking-contract.json"
+            )),
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn shared_adapter_conformance_fixtures() {
         kinetix_adapter_conformance::check(
             &ConformanceAdapter,

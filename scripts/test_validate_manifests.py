@@ -4,12 +4,13 @@
 import json
 import pathlib
 import sys
+import tempfile
 import tomllib
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-from validate_manifests import validate_manifest  # noqa: E402
+from validate_manifests import validate_manifest, validate_thinking_contract  # noqa: E402
 
 
 FEATURES = {
@@ -284,6 +285,95 @@ class ManifestValidationTests(unittest.TestCase):
         changed = manifest()
         changed["plugin_api"] = "99"
         self.assertEqual(validate_manifest(self.path, changed), "dev.kinetix.test")
+
+
+class ThinkingContractProofTests(unittest.TestCase):
+    """No reasoning declaration without executable proof."""
+
+    def plugin(self, *, provides, contract=None, source="", declared=False):
+        directory = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(directory, ignore_errors=True))
+        (directory / "src").mkdir()
+        (directory / "src" / "lib.rs").write_text(source, encoding="utf-8")
+        if contract is not None:
+            (directory / "thinking-contract.json").write_text(json.dumps(contract), encoding="utf-8")
+        changed = manifest()
+        changed["provides"] = dict(provides)
+        if declared:
+            changed["provides"]["thinking_translation"] = True
+        return directory, changed
+
+    ADAPTER_PROOF = '#[test]\nfn t() { check_thinking_contract(&A, include_str!("../thinking-contract.json")); }'
+    SOURCE_PROOF = '#[test]\nfn t() { check_model_source_contract(include_str!("../thinking-contract.json"), f); }'
+
+    @staticmethod
+    def adapter_contract(translation):
+        return {"schema_version": 1, "kind": "adapter", "plugin": "dev.kinetix.test", "translation": translation}
+
+    def test_declaration_without_a_contract_fails(self):
+        directory, data = self.plugin(provides={"provider_adapters": ["a"]}, declared=True, source=self.ADAPTER_PROOF)
+        with self.assertRaisesRegex(ValueError, "no executable proof"):
+            validate_thinking_contract(directory, data)
+
+    def test_adapter_without_a_contract_fails_even_when_undeclared(self):
+        directory, data = self.plugin(provides={"provider_adapters": ["a"]})
+        with self.assertRaisesRegex(ValueError, "requires thinking-contract.json"):
+            validate_thinking_contract(directory, data)
+
+    def test_translation_flag_must_match_the_declaration(self):
+        directory, data = self.plugin(
+            provides={"provider_adapters": ["a"]}, contract=self.adapter_contract(True), source=self.ADAPTER_PROOF
+        )
+        with self.assertRaisesRegex(ValueError, "must equal provides.thinking_translation"):
+            validate_thinking_contract(directory, data)
+
+        directory, data = self.plugin(
+            provides={"provider_adapters": ["a"]}, contract=self.adapter_contract(False), declared=True, source=self.ADAPTER_PROOF
+        )
+        with self.assertRaisesRegex(ValueError, "must equal provides.thinking_translation"):
+            validate_thinking_contract(directory, data)
+
+    def test_contract_must_be_executed_by_the_plugin(self):
+        directory, data = self.plugin(
+            provides={"provider_adapters": ["a"]}, contract=self.adapter_contract(True), declared=True, source="fn main() {}"
+        )
+        with self.assertRaisesRegex(ValueError, "non-ignored #\\[test\\] must run thinking-contract.json"):
+            validate_thinking_contract(directory, data)
+
+    def test_commented_ignored_or_untested_proof_does_not_count(self):
+        bodies = {
+            "comment": "// check_thinking_contract(&A, include_str!(\"../thinking-contract.json\"));",
+            "ignored": self.ADAPTER_PROOF.replace("#[test]", "#[test]\n#[ignore]"),
+            "not a test": "fn t() { check_thinking_contract(&A, include_str!(\"../thinking-contract.json\")); }",
+        }
+        for label, source in bodies.items():
+            with self.subTest(label):
+                directory, data = self.plugin(
+                    provides={"provider_adapters": ["a"]}, contract=self.adapter_contract(True), declared=True, source=source
+                )
+                with self.assertRaisesRegex(ValueError, "non-ignored"):
+                    validate_thinking_contract(directory, data)
+
+    def test_declared_adapter_with_matching_executed_contract_passes(self):
+        directory, data = self.plugin(
+            provides={"provider_adapters": ["a"]}, contract=self.adapter_contract(True), declared=True, source=self.ADAPTER_PROOF
+        )
+        validate_thinking_contract(directory, data)
+
+    def test_model_source_needs_an_executed_model_source_contract(self):
+        contract = {"schema_version": 1, "kind": "model_source", "plugin": "dev.kinetix.test"}
+        directory, data = self.plugin(provides={"account_model_sources": ["m"]})
+        with self.assertRaisesRegex(ValueError, "requires thinking-contract.json"):
+            validate_thinking_contract(directory, data)
+        directory, data = self.plugin(provides={"account_model_sources": ["m"]}, contract=contract, source=self.ADAPTER_PROOF)
+        with self.assertRaisesRegex(ValueError, "non-ignored #\\[test\\] must run thinking-contract.json"):
+            validate_thinking_contract(directory, data)
+        directory, data = self.plugin(provides={"account_model_sources": ["m"]}, contract=contract, source=self.SOURCE_PROOF)
+        validate_thinking_contract(directory, data)
+
+    def test_plugin_owning_no_reasoning_surface_needs_no_contract(self):
+        directory, data = self.plugin(provides={"credential_strategies": ["c"]})
+        validate_thinking_contract(directory, data)
 
 
 if __name__ == "__main__":

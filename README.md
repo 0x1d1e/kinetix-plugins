@@ -107,6 +107,8 @@ scripts/sync_host_contract.py            # copy from $KINETIX_DIR or ../kinetix
 scripts/sync_host_contract.py --check    # CI: fail on drift
 ```
 
+Plugins that provide a provider adapter or model source must pin their reasoning behavior with a `thinking-contract.json`; `provides.thinking_translation = true` without a passing contract fails CI. See [Plugin thinking contract](docs/thinking-contract.md).
+
 Before adding host imports or another plugin runtime, read the [WASM capability security contract](docs/wasm-capability-security-v1.md) and run its consumer conformance fixtures.
 
 See [MIGRATION.md](MIGRATION.md) for the original extraction boundary and source revision.

@@ -508,6 +508,7 @@ dependencies = [
 name = "kinetix-plugin-ai-studio"
 version = "0.1.3"
 dependencies = [
+ "kinetix-adapter-conformance",
  "kinetix-plugin-sdk",
  "serde",
  "serde_json",
@@ -527,6 +528,7 @@ dependencies = [
 name = "kinetix-plugin-b-ai"
 version = "0.1.3"
 dependencies = [
+ "kinetix-adapter-conformance",
  "kinetix-plugin-sdk",
  "serde",
  "serde_json",

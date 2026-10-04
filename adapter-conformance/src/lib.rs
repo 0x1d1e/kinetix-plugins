@@ -11,6 +11,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+mod thinking;
+pub use thinking::{check_model_source_contract, check_thinking_contract, CANONICAL_LEVELS};
+
 const REQUEST_TEXT: &str = include_str!("../../wit/fixtures/plugin-adapter/v1/requests/text.json");
 const REQUEST_IMAGE: &str =
     include_str!("../../wit/fixtures/plugin-adapter/v1/requests/image.json");

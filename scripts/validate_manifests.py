@@ -344,6 +344,82 @@ def validate_manifest(path: pathlib.Path, data: dict) -> str:
     return data["id"]
 
 
+THINKING_CONTRACT = "thinking-contract.json"
+THINKING_PROOF_CALLS = {
+    "adapter": "check_thinking_contract",
+    "model_source": "check_model_source_contract",
+}
+
+
+def live_test_bodies(source: str) -> list[str]:
+    """Bodies of `#[test]` functions that are not `#[ignore]`d.
+
+    Comments are stripped first so a mention in prose cannot count as proof.
+    """
+    source = re.sub(r"//[^\n]*", "", source)
+    source = re.sub(r"/\*.*?\*/", "", source, flags=re.S)
+    bodies = []
+    for match in re.finditer(r"#\[test\]((?:\s*#\[[^\]]*\])*)\s*(?:pub\s+)?fn\s+\w+\s*\([^)]*\)[^{]*\{", source):
+        if "ignore" in match.group(1):
+            continue
+        depth, index = 1, match.end()
+        while index < len(source) and depth:
+            depth += {"{": 1, "}": -1}.get(source[index], 0)
+            index += 1
+        bodies.append(source[match.end() : index])
+    return bodies
+
+
+def validate_thinking_contract(plugin_dir: pathlib.Path, manifest: dict) -> None:
+    """A plugin that owns reasoning behavior must carry executable proof.
+
+    Owning it means providing a provider adapter (builds the provider body) or a
+    model source (emits the reasoning capability the host translates from).
+    `provides.thinking_translation` is only valid with a passing adapter
+    contract whose `translation` flag matches, and the plugin's own sources must
+    run the contract so the file cannot drift unchecked. See
+    docs/thinking-contract.md.
+    """
+    provides = manifest.get("provides", {})
+    declared = bool(provides.get("thinking_translation"))
+    is_adapter = bool(provides.get("provider_adapters"))
+    is_source = bool(provides.get("model_sources") or provides.get("account_model_sources"))
+    contract_path = plugin_dir / THINKING_CONTRACT
+    if not (is_adapter or is_source):
+        require(not declared and not contract_path.exists(), contract_path, "thinking contract is only valid for a plugin with a provider adapter or model source")
+        return
+
+    kind = "adapter" if is_adapter else "model_source"
+    require(
+        contract_path.is_file(),
+        contract_path,
+        f"{manifest['id']} provides a {kind.replace('_', ' ')} and requires {THINKING_CONTRACT}"
+        + (" (provides.thinking_translation = true has no executable proof)" if declared else ""),
+    )
+    try:
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"{contract_path}: invalid JSON: {error}") from error
+    require(isinstance(contract, dict), contract_path, "contract must be an object")
+    require(contract.get("schema_version") == 1, contract_path, "contract schema_version must be 1")
+    require(contract.get("plugin") == manifest["id"], contract_path, f"contract plugin must be {manifest['id']}")
+    require(contract.get("kind") == kind, contract_path, f"contract kind must be '{kind}'")
+    if kind == "adapter":
+        require(
+            contract.get("translation") is declared,
+            contract_path,
+            f"contract translation ({contract.get('translation')}) must equal provides.thinking_translation ({declared})",
+        )
+
+    call = THINKING_PROOF_CALLS[kind]
+    sources = "\n".join(path.read_text(encoding="utf-8") for path in sorted((plugin_dir / "src").rglob("*.rs")))
+    require(
+        any(call in body and THINKING_CONTRACT in body for body in live_test_bodies(sources)),
+        plugin_dir / "src",
+        f"a non-ignored #[test] must run {THINKING_CONTRACT} through adapter_conformance::{call}",
+    )
+
+
 def validate_plugin_directory(plugin_dir: pathlib.Path) -> tuple[str, str, str]:
     manifest_path = plugin_dir / "plugin.toml"
     cargo_path = plugin_dir / "Cargo.toml"
@@ -351,6 +427,7 @@ def validate_plugin_directory(plugin_dir: pathlib.Path) -> tuple[str, str, str]:
         manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
         cargo = tomllib.loads(cargo_path.read_text(encoding="utf-8"))
         plugin_id = validate_manifest(manifest_path, manifest)
+        validate_thinking_contract(plugin_dir, manifest)
     except (OSError, tomllib.TOMLDecodeError, ValueError) as error:
         raise ValueError(f"{plugin_dir}: {error}") from error
 
