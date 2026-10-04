@@ -79,14 +79,20 @@ fn output_matches_declared_disposition_for_every_profile_and_mode() {
                     Disposition::Reject => {
                         assert!(result.is_err(), "{context}: accepted");
                     }
-                    Disposition::Normalize => match result {
-                        Ok(output) => assert!(
-                            observed(probe, keyword, &output).is_none(),
-                            "{context}: survived: {output}"
-                        ),
-                        // Lossy normalization may refuse in strict mode only.
-                        Err(e) => assert_eq!(mode, SchemaMode::Strict, "{context}: {e}"),
-                    },
+                    Disposition::Normalize => {
+                        let normalized = probe
+                            .get("normalized")
+                            .unwrap_or_else(|| panic!("{context}: probe has no normalized shape"));
+                        if probe["lossy"].as_bool() == Some(true) && mode == SchemaMode::Strict {
+                            assert!(result.is_err(), "{context}: lossy rewrite accepted");
+                            continue;
+                        }
+                        let output = result.unwrap_or_else(|e| panic!("{context}: {e}"));
+                        assert_eq!(
+                            &output["properties"]["probe"], normalized,
+                            "{context}: wrong normalized shape"
+                        );
+                    }
                 }
             }
         }
@@ -105,6 +111,36 @@ fn strict_mode_only_tightens_consumption() {
             assert!(
                 strict == compatible || tightened,
                 "{profile:?} {keyword}: strict {strict:?} vs compatible {compatible:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn rejections_name_the_offending_keyword_path() {
+    let probes: Value = serde_json::from_str(PROBES).unwrap();
+    for (keyword, probe) in probes["keywords"].as_object().unwrap() {
+        let schema = parameters(probe);
+        for profile in PROFILES {
+            if profile.disposition(keyword, SchemaMode::Strict) != Some(Disposition::Reject) {
+                continue;
+            }
+            let error = translate_tool_parameters(&schema, profile, SchemaMode::Strict)
+                .expect_err("rejected keyword was accepted");
+            let scope = match probe["at"].as_str() {
+                Some("root") => "$.",
+                _ => "$.properties.probe.",
+            };
+            // Keywords of one feature group (if/then/else) report the first hit.
+            let named = error
+                .path
+                .strip_prefix(scope)
+                .unwrap_or_else(|| panic!("{keyword} / {profile:?}: path {}", error.path));
+            assert_eq!(
+                profile.disposition(named, SchemaMode::Strict),
+                Some(Disposition::Reject),
+                "{keyword} / {profile:?}: path {}",
+                error.path
             );
         }
     }

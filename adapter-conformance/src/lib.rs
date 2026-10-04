@@ -382,9 +382,26 @@ fn check_schema_keywords(
                         return Err(format!("{label} was accepted but must be rejected"));
                     }
                 }
-                Disposition::Normalize if result.is_err() => {
-                    if mode != SchemaMode::Strict {
-                        return Err(format!("{label} failed: {}", result.unwrap_err()));
+                Disposition::Normalize => {
+                    let normalized = probe
+                        .get("normalized")
+                        .ok_or_else(|| format!("{label}: probe declares no normalized shape"))?;
+                    if probe["lossy"].as_bool() == Some(true) && mode == SchemaMode::Strict {
+                        if result.is_ok() {
+                            return Err(format!(
+                                "{label} is lossy and must be refused in strict mode"
+                            ));
+                        }
+                        continue;
+                    }
+                    let body = result.map_err(|error| format!("{label} failed: {error}"))?;
+                    let wire = find_probe_schema(&body)
+                        .ok_or_else(|| format!("{label}: probe schema missing from wire body"))?;
+                    let got = &wire["properties"]["probe"];
+                    if got != normalized {
+                        return Err(format!(
+                            "{label} normalized to {got}, expected {normalized}"
+                        ));
                     }
                 }
                 _ => {
@@ -400,7 +417,7 @@ fn check_schema_keywords(
                                 "{label} was not preserved: sent {sent:?}, wire {got:?}"
                             ))
                         }
-                        Disposition::Consume | Disposition::Normalize if got.is_some() => {
+                        Disposition::Consume if got.is_some() => {
                             return Err(format!("{label} survived on the wire: {got:?}"))
                         }
                         _ => {}
