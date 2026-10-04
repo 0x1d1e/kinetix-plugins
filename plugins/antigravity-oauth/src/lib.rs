@@ -151,9 +151,15 @@ fn from_shared_refresh_error(error: kinetix_plugin_sdk::oauth::OAuthRefreshError
     }
 }
 
-fn token_refresh_transport_error(code: &str, message: &str) -> RefreshError {
+fn token_refresh_transport_error(
+    code: &str,
+    message: &str,
+    retry_after: Option<u64>,
+) -> RefreshError {
     from_shared_refresh_error(kinetix_plugin_sdk::oauth::classify_refresh_transport_error(
-        code, message, None,
+        code,
+        message,
+        retry_after,
     ))
 }
 
@@ -270,6 +276,12 @@ fn load_credential(account: &AccountRef) -> Result<Credential, PluginError> {
         .map_err(|e| kinetix_plugin_sdk::helpers::error("invalid_configuration", e))
 }
 
+fn has_refresh_token(cred: &Credential) -> bool {
+    cred.refresh_token
+        .as_deref()
+        .is_some_and(|value| !value.is_empty())
+}
+
 fn should_refresh_before_lease(cred: &Credential, now_ms: u64) -> bool {
     !access_token_valid(cred, now_ms)
 }
@@ -288,7 +300,7 @@ impl exports::credential_strategy::Guest for Component {
 
         let now = kinetix_plugin_sdk::helpers::now_unix_millis();
         if should_refresh_before_lease(&cred, now) {
-            if cred.refresh_token.is_none() {
+            if !has_refresh_token(&cred) {
                 return Err(kinetix_plugin_sdk::helpers::error(
                     "credential_expired",
                     "Antigravity credential has no refresh_token and its access_token is not valid",
@@ -360,7 +372,7 @@ impl exports::credential_strategy::Guest for Component {
         let now = kinetix_plugin_sdk::helpers::now_unix_millis();
         if access_token_valid(&cred, now) {
             Ok("healthy".into())
-        } else if cred.refresh_token.is_some() {
+        } else if has_refresh_token(&cred) {
             // Refreshable: the next resolve will renew it.
             Ok("healthy".into())
         } else {
@@ -409,6 +421,7 @@ fn refresh(cred: &mut Credential) -> Result<(), RefreshError> {
     let refresh_token = cred
         .refresh_token
         .clone()
+        .filter(|value| !value.is_empty())
         .ok_or_else(|| RefreshError::credential_expired("no refresh_token"))?;
     let form = format!(
         "grant_type=refresh_token&refresh_token={}&client_id={}&client_secret={}",
@@ -430,7 +443,7 @@ fn refresh(cred: &mut Credential) -> Result<(), RefreshError> {
         credential: None,
     };
     let resp = kinetix::plugin::host_http::send(&req)
-        .map_err(|e| token_refresh_transport_error(&e.code, &e.message))?;
+        .map_err(|e| token_refresh_transport_error(&e.code, &e.message, e.retry_after))?;
     if resp.body_truncated {
         return Err(from_shared_refresh_error(
             kinetix_plugin_sdk::oauth::retryable_refresh_error("token response truncated"),
@@ -988,7 +1001,7 @@ fn send_model_refresh_request(
     req: &ModelHttpRequest,
 ) -> Result<ModelRefreshHttpResponse, RefreshError> {
     let response = model_world::kinetix::plugin::host_http::send(req)
-        .map_err(|e| token_refresh_transport_error(&e.code, &e.message))?;
+        .map_err(|e| token_refresh_transport_error(&e.code, &e.message, e.retry_after))?;
     Ok(ModelRefreshHttpResponse {
         status: response.status,
         body: response.body,
@@ -2728,7 +2741,8 @@ mod tests {
         assert_eq!(server_error.retry_after, Some(5));
 
         let transport_error =
-            token_refresh_transport_error("timeout", "connection timed out").into_plugin_error();
+            token_refresh_transport_error("timeout", "connection timed out", None)
+                .into_plugin_error();
         assert_eq!(transport_error.code, "upstream_unavailable");
         assert!(transport_error.retryable);
         assert_eq!(transport_error.retry_after, Some(5));
@@ -2833,6 +2847,7 @@ mod tests {
         enqueue_model_refresh_response(Err(token_refresh_transport_error(
             "timeout",
             "connection timed out",
+            None,
         )));
 
         let error = refresh_for_model_source(&mut model_refresh_credential()).unwrap_err();

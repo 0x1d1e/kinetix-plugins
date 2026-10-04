@@ -2,12 +2,15 @@
 """Classify every plugin from its manifest and require the conformance
 evidence its declared capabilities imply.
 
-    provider adapter        -> adapter-conformance.json, run by a crate test
+    provider_adapters       -> adapter-conformance.json, run by a crate test
+    credential_strategies   -> credential-conformance.json, run by a crate test
     host-native wire format -> manifest/host-adapter contract (validate_manifests.py)
-    credential/auth         -> crate unit tests (no shared suite yet)
+    auth_flows              -> crate unit tests (no shared suite yet)
     model discovery         -> crate unit tests (no shared suite yet)
 
-"No adapter" is derived from the manifest, never declared.
+"No adapter" is derived from the manifest, never declared. A profile for a
+capability the manifest does not declare is an error, as is a profile that no
+crate test feeds to its shared runner.
 """
 
 from __future__ import annotations
@@ -17,20 +20,39 @@ import json
 import pathlib
 import sys
 import tomllib
+from dataclasses import dataclass
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-PROFILE = "adapter-conformance.json"
-PROFILE_SCHEMA_VERSION = 2
-RUNNER_CALL = "kinetix_adapter_conformance::check"
+
+
+@dataclass(frozen=True)
+class Suite:
+    """One shared conformance runner, keyed by a manifest capability."""
+
+    cls: str
+    provides: str  # manifest `[provides]` key that requires the suite
+    profile: str  # profile file in the plugin directory
+    schema_version: int
+    names: str  # profile field naming the declared capability id
+    runner: str  # call a crate test must make with the profile
+
+    def missing(self, name: str, declared: set[str]) -> str:
+        return f"{name}: declares {self.provides} {sorted(declared)} but has no {self.profile}"
+
+
+SUITES = (
+    Suite("adapter", "provider_adapters", "adapter-conformance.json", 2, "adapter", "kinetix_adapter_conformance::check"),
+    Suite("credential", "credential_strategies", "credential-conformance.json", 1, "strategy", "kinetix_credential_conformance::check"),
+)
+PROFILE = SUITES[0].profile
+RUNNER_CALL = SUITES[0].runner
 
 
 def classify(manifest: dict) -> set[str]:
     provides = manifest.get("provides", {})
-    classes = set()
-    if provides.get("provider_adapters"):
-        classes.add("adapter")
-    if provides.get("credential_strategies") or provides.get("auth_flows"):
-        classes.add("auth")
+    classes = {suite.cls for suite in SUITES if provides.get(suite.provides)}
+    if provides.get("auth_flows"):
+        classes.add("auth-flow")
     if provides.get("model_sources") or provides.get("account_model_sources"):
         classes.add("discovery")
     for integration in manifest.get("integrations", []):
@@ -40,26 +62,33 @@ def classify(manifest: dict) -> set[str]:
     return classes
 
 
-def check_adapter(plugin_dir: pathlib.Path, manifest: dict) -> list[str]:
+def crate_sources(plugin_dir: pathlib.Path) -> list[str]:
+    """Rust text of the crate's `src/` and integration `tests/`."""
+    paths = [path for sub in ("src", "tests") for path in sorted((plugin_dir / sub).rglob("*.rs"))]
+    return [path.read_text(encoding="utf-8") for path in paths]
+
+
+def check_suite(suite: Suite, plugin_dir: pathlib.Path, manifest: dict) -> list[str]:
     name = plugin_dir.name
-    declared = set(manifest["provides"]["provider_adapters"])
-    profile_path = plugin_dir / PROFILE
+    declared = set(manifest["provides"][suite.provides])
+    profile_path = plugin_dir / suite.profile
     if not profile_path.is_file():
-        return [f"{name}: declares provider_adapters {sorted(declared)} but has no {PROFILE}"]
+        return [suite.missing(name, declared)]
     try:
         profile = json.loads(profile_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
-        return [f"{name}: {PROFILE} is not valid JSON: {error}"]
+        return [f"{name}: {suite.profile} is not valid JSON: {error}"]
     errors = []
-    if profile.get("schema_version") != PROFILE_SCHEMA_VERSION:
-        errors.append(f"{name}: {PROFILE} must use schema_version {PROFILE_SCHEMA_VERSION}")
-    if {profile.get("adapter")} != declared:
-        errors.append(f"{name}: {PROFILE} adapter {profile.get('adapter')!r} must be the declared provider_adapters {sorted(declared)}")
-    if not profile.get("transports"):
-        errors.append(f"{name}: {PROFILE} declares no transports")
-    sources = [path.read_text(encoding="utf-8") for path in sorted((plugin_dir / "src").rglob("*.rs"))]
-    if not any(PROFILE in text and RUNNER_CALL in text for text in sources):
-        errors.append(f"{name}: no crate test feeds {PROFILE} to {RUNNER_CALL}")
+    if profile.get("schema_version") != suite.schema_version:
+        errors.append(f"{name}: {suite.profile} must use schema_version {suite.schema_version}")
+    if {profile.get(suite.names)} != declared:
+        errors.append(
+            f"{name}: {suite.profile} {suite.names} {profile.get(suite.names)!r} must be the declared {suite.provides} {sorted(declared)}"
+        )
+    if suite.cls == "adapter" and not profile.get("transports"):
+        errors.append(f"{name}: {suite.profile} declares no transports")
+    if not any(suite.profile in text and suite.runner in text for text in crate_sources(plugin_dir)):
+        errors.append(f"{name}: no crate test feeds {suite.profile} to {suite.runner}")
     return errors
 
 
@@ -71,10 +100,11 @@ def validate(root: pathlib.Path) -> tuple[list[str], dict[str, set[str]]]:
         manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
         classes = classify(manifest)
         report[plugin_dir.name] = classes
-        if "adapter" in classes:
-            errors += check_adapter(plugin_dir, manifest)
-        elif (plugin_dir / PROFILE).exists():
-            errors.append(f"{plugin_dir.name}: has {PROFILE} but declares no provider_adapters")
+        for suite in SUITES:
+            if suite.cls in classes:
+                errors += check_suite(suite, plugin_dir, manifest)
+            elif (plugin_dir / suite.profile).exists():
+                errors.append(f"{plugin_dir.name}: has {suite.profile} but declares no {suite.provides}")
         if not classes:
             errors.append(f"{plugin_dir.name}: manifest declares nothing to classify")
     return errors, report

@@ -16,3 +16,4 @@ serde_json = "1"
 
 [dev-dependencies]
 kinetix-adapter-conformance = { path = "../../adapter-conformance" }
+kinetix-credential-conformance = { path = "../../credential-conformance", features = ["runtime"] }

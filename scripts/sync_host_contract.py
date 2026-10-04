@@ -23,6 +23,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PLUGIN_OWNED = (
     "wit/fixtures/capability-security",
+    "wit/fixtures/credential-strategy",
     "wit/fixtures/kxp",
     "wit/fixtures/plugin-adapter",
     "wit/fixtures/plugin-install",
