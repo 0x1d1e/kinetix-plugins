@@ -8,7 +8,7 @@
 #   5. validate catalog.json / trusted-publishers.json
 #   6. runtime-check the compiled Antigravity v3 adapter component with host imports trapped
 #   7. validate malicious capability-security packages and smoke-test their imports
-#   8. validate plugins/*/plugin.toml manifests
+#   8. validate plugins/*/plugin.toml manifests and manifest-derived conformance coverage
 #   9. check wit/ and sdk/wit*/ mirror the host contract ($KINETIX_DIR or ../kinetix)
 set -uo pipefail
 
@@ -90,6 +90,8 @@ validate_plugin_metadata() {
   python3 scripts/test_validate_manifests.py \
     && python3 scripts/test_plan_install.py \
     && python3 scripts/validate_manifests.py \
+    && python3 scripts/test_validate_conformance.py \
+    && python3 scripts/validate_conformance.py \
     && python3 scripts/test_validate_packages.py \
     && python3 scripts/test_validate_catalog.py \
     && python3 scripts/validate_catalog.py

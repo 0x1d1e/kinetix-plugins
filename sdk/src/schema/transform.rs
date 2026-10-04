@@ -1,7 +1,7 @@
 use super::{
     error, normalize,
-    profiles::{feature, IntersectionPolicy, TuplePolicy, UnionPolicy},
-    validate, walk, SchemaError, SchemaMode, SchemaProfile,
+    profiles::{feature, Feature},
+    validate, walk, Disposition, SchemaError, SchemaMode, SchemaProfile,
 };
 use serde_json::{json, Map, Value};
 
@@ -11,6 +11,7 @@ pub(super) fn translate(
     mode: SchemaMode,
 ) -> Result<(), SchemaError> {
     let policy = *profile.policy();
+    let normalizes = |feature| policy.declared(feature) == Disposition::Normalize;
     walk::postorder(schema, "$", 0, &mut 0, &mut |node, path| {
         let Some(map) = node.as_object_mut() else {
             return Ok(());
@@ -18,7 +19,7 @@ pub(super) fn translate(
         // Validate before stripping: malformed constraints and unknown keywords
         // remain errors, even inside a constraint that will be discarded.
         validate::node(map, path, false)?;
-        if policy.intersection == IntersectionPolicy::MergeSafely {
+        if normalizes(Feature::Intersection) {
             if let Some(branches) = map.remove("allOf") {
                 let mut merged = Map::new();
                 for branch in branches.as_array().unwrap() {
@@ -30,7 +31,7 @@ pub(super) fn translate(
                 normalize::merge(map, merged, path)?;
             }
         }
-        if policy.union == UnionPolicy::WidenToAnyOf {
+        if normalizes(Feature::ExclusiveUnion) {
             if let Some(branches) = map.remove("oneOf") {
                 if map.contains_key("anyOf") {
                     return Err(error(
@@ -47,19 +48,26 @@ pub(super) fn translate(
                 map.insert("anyOf".into(), branches);
             }
         }
-        if policy.tuple == TuplePolicy::NormalizeToHomogeneousItems {
+        if normalizes(Feature::Tuple) {
             tuple(map, path, mode)?;
         }
         let keys: Vec<_> = map.keys().cloned().collect();
         for key in keys {
-            if let Some(feature) = feature(&key) {
-                if !policy.supports(feature) {
-                    if mode == SchemaMode::Strict || !policy.may_drop(feature) {
-                        return Err(error(
-                            &format!("{path}.{key}"),
-                            format!("unsupported JSON Schema keyword '{key}'"),
-                        ));
-                    }
+            let Some(feature) = feature(&key) else {
+                continue;
+            };
+            match policy.disposition(feature, mode) {
+                Disposition::Preserve => {}
+                // The dedicated pass above owns the rewrite. A survivor is a
+                // translator bug, reported by the final validation.
+                Disposition::Normalize => {}
+                Disposition::Reject => {
+                    return Err(error(
+                        &format!("{path}.{key}"),
+                        format!("unsupported JSON Schema keyword '{key}'"),
+                    ));
+                }
+                Disposition::Consume => {
                     if key == "patternProperties"
                         && map
                             .get(&key)
@@ -73,9 +81,6 @@ pub(super) fn translate(
                     }
                     map.remove(&key);
                 }
-            }
-            if policy.dropped_annotations.contains(&key.as_str()) {
-                map.remove(&key);
             }
         }
         Ok(())
