@@ -34,7 +34,7 @@ model = "gemini-2.5-flash"
 
 An account proposal also produces a credential acquisition request, never a credential value. With no `install.account`, neither object is proposed. Routes target the integration's provider account pool, even when an initial account is proposed. They never pin that account; ranking, balancing, failover, and sticky-affinity selection remain core-owned. Missing routes stay absent; model discovery does not invent them. An install declaration requires a provider template. V1 supports one account proposal per integration, with route IDs unique within that integration.
 
-**Host coordination:** `credential_mode` already exists in core. `manual_credential` and `install` are new manifest fields; strict older hosts reject them. The host parser must support these fields before packages containing them are released. [Kinetix PR #190](https://github.com/PrightCord/kinetix/pull/190) adds parsing and validation only, without applying proposals or changing enrollment policy. Older parsers remain incompatible.
+**Host coordination:** `credential_mode` already exists in core. `manual_credential` and `install` are new manifest fields; strict older hosts reject them. The host parser must support these fields before packages containing them are released. [Kinetix PR #190](https://github.com/0x1d1e/kinetix/pull/190) adds parsing and validation only, without applying proposals or changing enrollment policy. Older parsers remain incompatible.
 
 ## Generate and inspect
 

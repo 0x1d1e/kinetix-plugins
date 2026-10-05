@@ -138,11 +138,11 @@ Artifacts:
 - \`SHA256SUMS\` — SHA-256 hashes for both artifacts.
 EOF
 
-if gh release view "$TAG" --repo PrightCord/kinetix-plugins >/dev/null 2>&1; then
+if gh release view "$TAG" --repo 0x1d1e/kinetix-plugins >/dev/null 2>&1; then
   echo "release $TAG already exists; refusing to overwrite immutable release assets" >&2
   exit 1
 fi
 
-gh release create "$TAG" "$PACKAGE" "$COMPONENT" "$OUT/SHA256SUMS"   --verify-tag   --title "$NAME v$VERSION"   --notes-file "$NOTES"   $DRAFT_FLAG   --repo PrightCord/kinetix-plugins
+gh release create "$TAG" "$PACKAGE" "$COMPONENT" "$OUT/SHA256SUMS"   --verify-tag   --title "$NAME v$VERSION"   --notes-file "$NOTES"   $DRAFT_FLAG   --repo 0x1d1e/kinetix-plugins
 
 echo "==> published $TAG"

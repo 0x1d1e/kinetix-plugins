@@ -4,7 +4,7 @@ version = "0.1.3"
 edition = "2021"
 description = "Kinetix plugin: Google AI Studio setup and live model discovery."
 license = "MIT"
-repository = "https://github.com/PrightCord/kinetix-plugins"
+repository = "https://github.com/0x1d1e/kinetix-plugins"
 
 [lib]
 crate-type = ["cdylib"]

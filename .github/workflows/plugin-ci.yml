@@ -17,7 +17,7 @@ jobs:
       - name: Check out Kinetix host contract
         uses: actions/checkout@v4
         with:
-          repository: PrightCord/kinetix
+          repository: 0x1d1e/kinetix
           path: .host/kinetix
           sparse-checkout: wit
       - uses: dtolnay/rust-toolchain@stable

@@ -4,7 +4,7 @@ version = "0.1.11"
 edition = "2021"
 description = "Kinetix plugin: OpenCode Free no-auth provider adapter and dynamic model discovery."
 license = "MIT"
-repository = "https://github.com/PrightCord/kinetix-plugins"
+repository = "https://github.com/0x1d1e/kinetix-plugins"
 
 [lib]
 crate-type = ["cdylib"]

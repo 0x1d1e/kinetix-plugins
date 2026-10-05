@@ -46,7 +46,7 @@
         "format": "anthropic",
         "endpoint": "/zen/v1/messages"
       },
-      "source": "https://github.com/PrightCord/kinetix-plugins/issues/41"
+      "source": "https://github.com/0x1d1e/kinetix-plugins/issues/41"
     }
   ]
 }

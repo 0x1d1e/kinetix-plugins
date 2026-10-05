@@ -167,9 +167,9 @@ class PackageContractTests(unittest.TestCase):
 
     def test_provenance_schema_and_safe_repository_normalization(self):
         normalized = normalized_repository_url(
-            "https://fixture-user@GitHub.com/PrightCord/kinetix-plugins.git"
+            "https://fixture-user@GitHub.com/0x1d1e/kinetix-plugins.git"
         )
-        self.assertEqual(normalized, "https://github.com/PrightCord/kinetix-plugins")
+        self.assertEqual(normalized, "https://github.com/0x1d1e/kinetix-plugins")
         self.assertNotIn("fixture-user", normalized)
         validate_provenance({"schema_version": 1}, "fixture")
         with self.assertRaises(ValueError):

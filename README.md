@@ -1,6 +1,6 @@
 # Kinetix Plugins
 
-Official plugin collection, plugin SDK, catalog metadata, build tooling, and release artifacts for [Kinetix](https://github.com/PrightCord/kinetix).
+Official plugin collection, plugin SDK, catalog metadata, build tooling, and release artifacts for [Kinetix](https://github.com/0x1d1e/kinetix).
 
 This repository is split out of the Kinetix monorepo so plugin development, testing, signing, and distribution can evolve independently from the host runtime.
 
@@ -17,8 +17,8 @@ This repository is split out of the Kinetix monorepo so plugin development, test
 > - Plugin version numbers restart, so a version string such as `0.1.7` may
 >   refer to a different artifact before and after the reboot.
 >
-> Plan: [Kinetix docs/reboot.md](https://github.com/PrightCord/kinetix/blob/main/docs/reboot.md).
-> Decision: [ADR-0001](https://github.com/PrightCord/kinetix/blob/main/docs/adr/0001-reboot-versioning.md).
+> Plan: [Kinetix docs/reboot.md](https://github.com/0x1d1e/kinetix/blob/main/docs/reboot.md).
+> Decision: [ADR-0001](https://github.com/0x1d1e/kinetix/blob/main/docs/adr/0001-reboot-versioning.md).
 
 ## Repository layout
 
@@ -33,7 +33,7 @@ This repository is split out of the Kinetix monorepo so plugin development, test
 └── .github/workflows/        # Plugin CI and release automation
 ```
 
-The Kinetix host runtime, dashboard integration, database migrations, and host-side plugin tests remain in `PrightCord/kinetix`.
+The Kinetix host runtime, dashboard integration, database migrations, and host-side plugin tests remain in `0x1d1e/kinetix`.
 
 ## Build plugins
 
@@ -65,7 +65,7 @@ Inspect proposed installation objects and permissions without applying them:
 python3 scripts/plan_install.py --manifest plugins/ai-studio/plugin.toml
 ```
 
-See [the draft install-plan contract](docs/plugin-install-v1.md) for credential declarations, package inspection, and host approval requirements. New fields require [companion host support](https://github.com/PrightCord/kinetix/pull/190) before release.
+See [the draft install-plan contract](docs/plugin-install-v1.md) for credential declarations, package inspection, and host approval requirements. New fields require [companion host support](https://github.com/0x1d1e/kinetix/pull/190) before release.
 
 Build every first-party plugin into one output directory:
 
@@ -116,7 +116,7 @@ A release does **not** automatically make a catalog entry installable. After the
 
 ## Compatibility
 
-The plugin contract is owned by `PrightCord/kinetix`: its `wit/` directory holds the canonical WIT worlds, JSON contract schemas, and shared golden fixtures. This repository keeps byte-identical copies in `wit/` and `sdk/wit*/`; only the fixture trees listed in `PLUGIN_OWNED` (`scripts/sync_host_contract.py`) originate here. Change the contract in the host first, then mirror it:
+The plugin contract is owned by `0x1d1e/kinetix`: its `wit/` directory holds the canonical WIT worlds, JSON contract schemas, and shared golden fixtures. This repository keeps byte-identical copies in `wit/` and `sdk/wit*/`; only the fixture trees listed in `PLUGIN_OWNED` (`scripts/sync_host_contract.py`) originate here. Change the contract in the host first, then mirror it:
 
 ```bash
 scripts/sync_host_contract.py            # copy from $KINETIX_DIR or ../kinetix

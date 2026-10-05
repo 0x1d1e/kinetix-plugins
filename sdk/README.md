@@ -2,7 +2,7 @@
 
 Author-facing Rust bindings for the Kinetix plugin ABI. The canonical ABI lives at `../wit/kinetix-plugin.wit`; the SDK keeps a synchronized copy in `sdk/wit/` for `wit-bindgen`.
 
-Host/runtime architecture is documented in the main [Kinetix repository](https://github.com/PrightCord/kinetix/blob/main/docs/KINETIX-PLUGIN-ARCHITECTURE.md). Host imports, permissions, limits, and adversarial consumer fixtures follow the [WASM capability security contract](../docs/wasm-capability-security-v1.md).
+Host/runtime architecture is documented in the main [Kinetix repository](https://github.com/0x1d1e/kinetix/blob/main/docs/KINETIX-PLUGIN-ARCHITECTURE.md). Host imports, permissions, limits, and adversarial consumer fixtures follow the [WASM capability security contract](../docs/wasm-capability-security-v1.md).
 
 ## Build a plugin component
 

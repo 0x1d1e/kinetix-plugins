@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Mirror the canonical plugin contract from a Kinetix host checkout.
 
-The host repository (`PrightCord/kinetix`) owns `wit/`: the WIT worlds,
+The host repository (`0x1d1e/kinetix`) owns `wit/`: the WIT worlds,
 JSON contract schemas, and shared golden fixtures. This repository keeps
 byte-identical copies under `wit/` and `sdk/wit*/`. Only the fixture trees in
 `PLUGIN_OWNED` originate here.

@@ -1,6 +1,6 @@
 # Kinetix Plugins
 
-Guest SDK, first-party plugins, catalog, and `.kxp` packaging for the Kinetix gateway. The host runtime lives in `PrightCord/kinetix`.
+Guest SDK, first-party plugins, catalog, and `.kxp` packaging for the Kinetix gateway. The host runtime lives in `0x1d1e/kinetix`.
 
 ## Boundaries
 
