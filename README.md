@@ -4,6 +4,22 @@ Official plugin collection, plugin SDK, catalog metadata, build tooling, and rel
 
 This repository is split out of the Kinetix monorepo so plugin development, testing, signing, and distribution can evolve independently from the host runtime.
 
+> [!IMPORTANT]
+> **kinetix-plugins is rebooting at 0.1.0 together with Kinetix.** The reboot
+> breaks the plugin contract. When 0.1.0 ships, all existing releases and tags
+> (including per-plugin tags such as `opencode-free-v0.1.9`) will be deleted.
+> The pre-reboot source will stay on the `legacy/v0.6` branch.
+>
+> - `kinetix update` on 0.6.x will not detect 0.1.0. Reinstall Kinetix
+>   manually with `install.sh`.
+> - Plugin installs from Kinetix 0.6.x will fail once the old release assets
+>   are gone.
+> - Plugin version numbers restart, so a version string such as `0.1.7` may
+>   refer to a different artifact before and after the reboot.
+>
+> Plan: [Kinetix docs/reboot.md](https://github.com/PrightCord/kinetix/blob/main/docs/reboot.md).
+> Decision: [ADR-0001](https://github.com/PrightCord/kinetix/blob/main/docs/adr/0001-reboot-versioning.md).
+
 ## Repository layout
 
 ```text
