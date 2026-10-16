@@ -4,6 +4,11 @@ Official plugin collection, plugin SDK, catalog metadata, build tooling, and rel
 
 This repository is split out of the Kinetix monorepo so plugin development, testing, signing, and distribution can evolve independently from the host runtime.
 
+> [!CAUTION]
+> **This project is abandoned.** The experiment it was built for has ended.
+> No further development, fixes, or releases are planned. The code is kept for
+> reference.
+
 > [!IMPORTANT]
 > **kinetix-plugins is rebooting at 0.1.0 together with Kinetix.** The reboot
 > breaks the plugin contract. When 0.1.0 ships, all existing releases and tags
